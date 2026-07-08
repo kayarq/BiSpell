@@ -30,12 +30,25 @@ final class NotesAppearanceController: ObservableObject {
         set { settings.fontSize = min(28, max(11, newValue)) }
     }
 
+    var textColor: NotesTextColorOption {
+        get { settings.textColor }
+        set { settings.textColor = newValue }
+    }
+
+    /// Theme tokens with user text-color override applied.
     func tokens(colorScheme: ColorScheme = .dark) -> NotesThemeTokens {
-        settings.theme.tokens()
+        settings.theme.tokens().applying(textColor: settings.textColor)
     }
 
     func colors(colorScheme: ColorScheme) -> NotesTheme.Colors {
-        settings.theme.colors(effectiveDark: colorScheme == .dark)
+        let t = tokens(colorScheme: colorScheme)
+        return NotesTheme.Colors(
+            editorBackground: t.editor,
+            editorText: t.textPrimary,
+            sidebarBackground: t.sidebar,
+            chromeBackground: t.chromeBar,
+            secondaryText: t.textSecondary
+        )
     }
 
     func bodyFont() -> NSFont {

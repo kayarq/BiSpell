@@ -73,6 +73,48 @@ public enum NotesFontOption: String, Codable, CaseIterable, Sendable, Identifiab
     }
 }
 
+
+// MARK: - Text color
+
+/// Soft, readable text colors the user can pick (or theme default).
+public enum NotesTextColorOption: String, Codable, CaseIterable, Sendable, Identifiable {
+    case themeDefault
+    case softWhite
+    case softGreen
+    case softAmber
+    case softCyan
+    case softGray
+    case softInk
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .themeDefault: return "Theme default"
+        case .softWhite: return "Soft white"
+        case .softGreen: return "Soft green"
+        case .softAmber: return "Soft amber"
+        case .softCyan: return "Soft cyan"
+        case .softGray: return "Soft gray"
+        case .softInk: return "Soft ink"
+        }
+    }
+
+    /// Fixed RGB when not themeDefault; nil means use theme textPrimary.
+    public var fixedRGB: (r: CGFloat, g: CGFloat, b: CGFloat)? {
+        switch self {
+        case .themeDefault: return nil
+        // Soft but clear on dark backgrounds (~WCAG-ish comfort, not pure #FFF)
+        case .softWhite: return (0.90, 0.91, 0.92)   // #E6E8EB
+        case .softGreen: return (0.78, 0.92, 0.80)   // #C7EACC
+        case .softAmber: return (0.95, 0.86, 0.68)   // #F2DBAD
+        case .softCyan: return (0.78, 0.90, 0.95)    // #C7E6F2
+        case .softGray: return (0.78, 0.80, 0.82)    // #C7CCD1
+        case .softInk: return (0.18, 0.18, 0.17)     // #2E2E2B — for light themes
+        }
+    }
+}
+
 // MARK: - Tokens
 
 /// Semantic colors + radii for terminal UI (AppKit + SwiftUI consumers).
@@ -106,6 +148,30 @@ public struct NotesThemeTokens: Sendable {
     public var chipRadius: CGFloat
     public var cardRadius: CGFloat
     public var rowRadius: CGFloat
+
+    /// Override primary body text (and soft secondary/tertiary derived from it).
+    public func applying(textColor option: NotesTextColorOption) -> NotesThemeTokens {
+        guard let rgb = option.fixedRGB else { return self }
+        var copy = self
+        let primary = NSColor(calibratedRed: rgb.r, green: rgb.g, blue: rgb.b, alpha: 1)
+        copy.textPrimary = primary
+        // Derive hierarchy without pure gray washouts (use fixed RGB, not color-space components)
+        let factor2: CGFloat = option == .softInk ? 0.55 : 0.72
+        let factor3: CGFloat = option == .softInk ? 0.40 : 0.52
+        let base: CGFloat = option == .softInk ? 0.92 : 0.12
+        func mix(_ f: CGFloat) -> NSColor {
+            NSColor(
+                calibratedRed: rgb.r * f + base * (1 - f),
+                green: rgb.g * f + base * (1 - f),
+                blue: rgb.b * f + base * (1 - f),
+                alpha: 1
+            )
+        }
+        copy.textSecondary = mix(factor2)
+        copy.textTertiary = mix(factor3)
+        copy.caret = primary
+        return copy
+    }
 }
 
 // MARK: - Settings
@@ -114,17 +180,25 @@ public struct NotesAppearanceSettings: Codable, Equatable, Sendable {
     public var theme: NotesTheme
     public var font: NotesFontOption
     public var fontSize: Double
+    public var textColor: NotesTextColorOption
 
     public static let `default` = NotesAppearanceSettings(
         theme: .phosphor,
         font: .sfMono,
-        fontSize: 14
+        fontSize: 14,
+        textColor: .themeDefault
     )
 
-    public init(theme: NotesTheme, font: NotesFontOption, fontSize: Double = 14) {
+    public init(
+        theme: NotesTheme,
+        font: NotesFontOption,
+        fontSize: Double = 14,
+        textColor: NotesTextColorOption = .themeDefault
+    ) {
         self.theme = theme
         self.font = font
         self.fontSize = fontSize
+        self.textColor = textColor
     }
 
     public init(from decoder: Decoder) throws {
@@ -140,10 +214,16 @@ public struct NotesAppearanceSettings: Codable, Equatable, Sendable {
             font = .sfMono
         }
         fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 14
+        if let textRaw = try? c.decode(String.self, forKey: .textColor),
+           let tc = NotesTextColorOption(rawValue: textRaw) {
+            textColor = tc
+        } else {
+            textColor = .themeDefault
+        }
     }
 
     enum CodingKeys: String, CodingKey {
-        case theme, font, fontSize
+        case theme, font, fontSize, textColor
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -151,6 +231,7 @@ public struct NotesAppearanceSettings: Codable, Equatable, Sendable {
         try c.encode(theme.rawValue, forKey: .theme)
         try c.encode(font.rawValue, forKey: .font)
         try c.encode(fontSize, forKey: .fontSize)
+        try c.encode(textColor.rawValue, forKey: .textColor)
     }
 }
 
@@ -188,6 +269,20 @@ public extension NotesTheme {
         public var sidebarBackground: NSColor
         public var chromeBackground: NSColor
         public var secondaryText: NSColor
+
+        public init(
+            editorBackground: NSColor,
+            editorText: NSColor,
+            sidebarBackground: NSColor,
+            chromeBackground: NSColor,
+            secondaryText: NSColor
+        ) {
+            self.editorBackground = editorBackground
+            self.editorText = editorText
+            self.sidebarBackground = sidebarBackground
+            self.chromeBackground = chromeBackground
+            self.secondaryText = secondaryText
+        }
     }
 
     func colors(effectiveDark: Bool) -> Colors {
@@ -210,9 +305,9 @@ public extension NotesTheme {
                 editor: hex(0x0E1410),
                 elevated: hex(0x141C16),
                 chrome: hex(0x101612),
-                text: hex(0xB6F5C8),
-                text2: hex(0x6FA88A),
-                text3: hex(0x3D5C4A),
+                text: hex(0xD4F5DE),
+                text2: hex(0x8FCBAA),
+                text3: hex(0x5A8A70),
                 accent: hex(0x3DDC84),
                 accentDim: hex(0x1A3D2A),
                 accentBright: hex(0x6EF5A8),
@@ -227,9 +322,9 @@ public extension NotesTheme {
                 editor: hex(0x161008),
                 elevated: hex(0x1E160C),
                 chrome: hex(0x18120A),
-                text: hex(0xFFD29A),
-                text2: hex(0xC49A5C),
-                text3: hex(0x6B5230),
+                text: hex(0xFFE4B8),
+                text2: hex(0xD4B07A),
+                text3: hex(0x8A6B40),
                 accent: hex(0xFFB000),
                 accentDim: hex(0x3D2A10),
                 accentBright: hex(0xFFC94D),
@@ -244,9 +339,9 @@ public extension NotesTheme {
                 editor: hex(0x0C121A),
                 elevated: hex(0x121A24),
                 chrome: hex(0x0E141C),
-                text: hex(0xC8E7F5),
-                text2: hex(0x6A9BB0),
-                text3: hex(0x3A5A6A),
+                text: hex(0xDCF2FA),
+                text2: hex(0x8BB8CC),
+                text3: hex(0x4A7080),
                 accent: hex(0x5FD0FF),
                 accentDim: hex(0x163040),
                 accentBright: hex(0x8ADFFF),
@@ -261,9 +356,9 @@ public extension NotesTheme {
                 editor: hex(0xF2F0E9),
                 elevated: hex(0xFFFFFF),
                 chrome: hex(0xE8E5DB),
-                text: hex(0x1A1A18),
-                text2: hex(0x5C5A52),
-                text3: hex(0x8A877C),
+                text: hex(0x141412),
+                text2: hex(0x4A4840),
+                text3: hex(0x6E6B62),
                 accent: hex(0x0B6E4F),
                 accentDim: hex(0xC5D9CF),
                 accentBright: hex(0x0E8A63),

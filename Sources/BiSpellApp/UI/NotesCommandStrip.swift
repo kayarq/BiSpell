@@ -115,6 +115,7 @@ struct NotesCommandStrip: View {
             HStack(spacing: 6) {
                 themeMenu
                 fontMenu
+                textColorMenu
                 NotesToolbarDivider()
 
                 NotesToolbarIconChip(
@@ -241,6 +242,38 @@ struct NotesCommandStrip: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Font")
+    }
+
+    private var textColorMenu: some View {
+        Menu {
+            ForEach(NotesTextColorOption.allCases) { opt in
+                Button {
+                    appearance.textColor = opt
+                } label: {
+                    HStack {
+                        Circle()
+                            .fill(swatch(for: opt))
+                            .frame(width: 8, height: 8)
+                        Text(opt.displayName)
+                        if appearance.textColor == opt {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            chipLabel(systemName: "paintpalette", title: "Text")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Text color")
+    }
+
+    private func swatch(for opt: NotesTextColorOption) -> Color {
+        if let rgb = opt.fixedRGB {
+            return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
+        }
+        return Color(nsColor: appearance.theme.tokens().textPrimary)
     }
 
     private var fromTemplateMenu: some View {
