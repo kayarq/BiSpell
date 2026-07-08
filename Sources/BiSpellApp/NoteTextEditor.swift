@@ -13,7 +13,9 @@ struct NoteTextEditor: NSViewRepresentable {
     var editorFont: NSFont = .systemFont(ofSize: NSFont.systemFontSize + 1)
     var textColor: NSColor = .textColor
     var backgroundColor: NSColor = .textBackgroundColor
-    var lockedBackgroundColor: NSColor = NSColor.systemYellow.withAlphaComponent(0.22)
+    var lockedBackgroundColor: NSColor = NSColor.systemPurple.withAlphaComponent(0.16)
+    /// Foreground for locked text runs (purple family, theme-aware).
+    var lockedTextColor: NSColor = NSColor.systemPurple
     var accentColor: NSColor = .controlAccentColor
     var borderColor: NSColor = NSColor.separatorColor
     var isEditable: Bool = true
@@ -400,13 +402,15 @@ struct NoteTextEditor: NSViewRepresentable {
             guard let textView, let storage = textView.textStorage else { return }
             let spans = parent.lockedSpans
 
-            // No locks: only clear stale highlight once (do not touch font/colors every keystroke).
+            // No locks: only clear stale lock styling once (do not touch attributes every keystroke).
             if spans.isEmpty {
                 if lastPaintSignature == "empty" { return }
                 let full = NSRange(location: 0, length: storage.length)
                 if storage.length > 0 {
                     storage.beginEditing()
                     storage.removeAttribute(.backgroundColor, range: full)
+                    // Clear stale purple from previously locked runs.
+                    storage.addAttribute(.foregroundColor, value: parent.textColor, range: full)
                     storage.endEditing()
                 }
                 lastPaintSignature = "empty"
@@ -419,8 +423,10 @@ struct NoteTextEditor: NSViewRepresentable {
 
             let full = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
-            // Only manage lock highlight backgrounds — typing path sets font via typingAttributes.
+            // Manage lock styling: purple text + subtle purple fill on locked runs,
+            // base text color everywhere else (typing path sets font via typingAttributes).
             storage.removeAttribute(.backgroundColor, range: full)
+            storage.addAttribute(.foregroundColor, value: parent.textColor, range: full)
             for span in spans {
                 var r = span.utf16Range
                 if r.location >= storage.length { continue }
@@ -429,13 +435,14 @@ struct NoteTextEditor: NSViewRepresentable {
                 }
                 guard r.length > 0 else { continue }
                 storage.addAttribute(.backgroundColor, value: parent.lockedBackgroundColor, range: r)
+                storage.addAttribute(.foregroundColor, value: parent.lockedTextColor, range: r)
             }
             storage.endEditing()
         }
 
         private func paintSignature() -> String {
             let spans = parent.lockedSpans.map { "\($0.location):\($0.length)" }.joined(separator: ",")
-            return "\(spans)|\(parent.lockedBackgroundColor)"
+            return "\(spans)|\(parent.lockedBackgroundColor)|\(parent.lockedTextColor)|\(parent.textColor)"
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

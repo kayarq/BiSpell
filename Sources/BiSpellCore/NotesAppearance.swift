@@ -137,6 +137,8 @@ public struct NotesThemeTokens: Sendable {
     public var borderStrong: NSColor
 
     public var lockFill: NSColor
+    /// Foreground color for locked text runs (purple family, theme-aware).
+    public var lockText: NSColor
     public var templateBadge: NSColor
     public var dirty: NSColor
     public var danger: NSColor
@@ -305,8 +307,8 @@ public extension NotesTheme {
                 editor: hex(0x0E1410),
                 elevated: hex(0x141C16),
                 chrome: hex(0x101612),
-                text: hex(0xD4F5DE),
-                text2: hex(0x8FCBAA),
+                text: hex(0xE2FFE9),
+                text2: hex(0x9BDCB4),
                 text3: hex(0x5A8A70),
                 accent: hex(0x3DDC84),
                 accentDim: hex(0x1A3D2A),
@@ -322,8 +324,8 @@ public extension NotesTheme {
                 editor: hex(0x161008),
                 elevated: hex(0x1E160C),
                 chrome: hex(0x18120A),
-                text: hex(0xFFE4B8),
-                text2: hex(0xD4B07A),
+                text: hex(0xFFE0A6),
+                text2: hex(0xE2BD85),
                 text3: hex(0x8A6B40),
                 accent: hex(0xFFB000),
                 accentDim: hex(0x3D2A10),
@@ -339,8 +341,8 @@ public extension NotesTheme {
                 editor: hex(0x0C121A),
                 elevated: hex(0x121A24),
                 chrome: hex(0x0E141C),
-                text: hex(0xDCF2FA),
-                text2: hex(0x8BB8CC),
+                text: hex(0xE4F9FF),
+                text2: hex(0x9DD0E7),
                 text3: hex(0x4A7080),
                 accent: hex(0x5FD0FF),
                 accentDim: hex(0x163040),
@@ -356,8 +358,8 @@ public extension NotesTheme {
                 editor: hex(0xF2F0E9),
                 elevated: hex(0xFFFFFF),
                 chrome: hex(0xE8E5DB),
-                text: hex(0x141412),
-                text2: hex(0x4A4840),
+                text: hex(0x191E14),
+                text2: hex(0x424C3B),
                 text3: hex(0x6E6B62),
                 accent: hex(0x0B6E4F),
                 accentDim: hex(0xC5D9CF),
@@ -395,6 +397,11 @@ private extension NotesThemeTokens {
         let borderStrong = isLight
             ? NSColor(calibratedWhite: 0, alpha: 0.18)
             : NSColor(calibratedWhite: 1, alpha: 0.16)
+        // Locked text is purple across all themes (user request): soft lavender on dark,
+        // deep violet on light — tinted fill stays subtle so it reads as "protected",
+        // not highlighted.
+        let lockTint = isLight ? hex(0x6D28D9) : hex(0xA78BFA)
+        let lockTextColor = isLight ? hex(0x5B21B6) : hex(0xD9C6FF)
         return NotesThemeTokens(
             window: window,
             sidebar: sidebar,
@@ -409,7 +416,8 @@ private extension NotesThemeTokens {
             accentBright: accentBright,
             borderSubtle: borderSubtle,
             borderStrong: borderStrong,
-            lockFill: accent.withAlphaComponent(lockAlpha),
+            lockFill: lockTint.withAlphaComponent(lockAlpha),
+            lockText: lockTextColor,
             templateBadge: accentDim,
             dirty: dirty,
             danger: danger,

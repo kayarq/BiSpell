@@ -231,6 +231,7 @@ struct NotesRootView: View {
                     textColor: tokens.textPrimary,
                     backgroundColor: tokens.editor,
                     lockedBackgroundColor: tokens.lockFill,
+                    lockedTextColor: tokens.lockText,
                     accentColor: tokens.accent,
                     borderColor: tokens.borderStrong,
                     onEditingChanged: {
