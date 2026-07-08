@@ -17,7 +17,8 @@ public final class NotesStore: @unchecked Sendable {
             self.directory = base
         }
         self.encoder = JSONEncoder()
-        self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Compact JSON — pretty-print is expensive for large markdown bodies.
+        self.encoder.outputFormatting = []
         self.encoder.dateEncodingStrategy = .iso8601
         self.decoder = JSONDecoder()
         self.decoder.dateDecodingStrategy = .iso8601
@@ -53,6 +54,17 @@ public final class NotesStore: @unchecked Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try encoder.encode(note)
         try data.write(to: fileURL(for: note.id), options: .atomic)
+    }
+
+    /// Batch write many notes under one lock (import path).
+    public func saveAll(_ notes: [Note]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for note in notes {
+            let data = try encoder.encode(note)
+            try data.write(to: fileURL(for: note.id), options: .atomic)
+        }
     }
 
     public func delete(id: UUID) throws {

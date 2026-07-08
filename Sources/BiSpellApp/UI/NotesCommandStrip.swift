@@ -39,7 +39,6 @@ struct NotesToolbarChip<LabelContent: View>: View {
         .disabled(disabled)
         .opacity(disabled ? 0.4 : 1)
         .onHover { hovering = $0 }
-        .help("") // callers set .help outside
     }
 
     private var foreground: Color {
@@ -62,16 +61,6 @@ struct NotesToolbarChip<LabelContent: View>: View {
         if isPrimary { return Color(nsColor: t.accent) }
         if hovering { return Color(nsColor: t.borderStrong) }
         return Color(nsColor: t.borderSubtle)
-    }
-}
-
-extension NotesToolbarChip where LabelContent == Text {
-    init(_ title: String, isPrimary: Bool = false, isDestructive: Bool = false, disabled: Bool = false, action: @escaping () -> Void) {
-        self.isPrimary = isPrimary
-        self.isDestructive = isDestructive
-        self.disabled = disabled
-        self.action = action
-        self.label = { Text(title) }
     }
 }
 
@@ -99,7 +88,7 @@ struct NotesToolbarIconChip: View {
     }
 }
 
-/// Terminal-style command strip for Notes detail chrome.
+/// Grouped / simplified terminal command strip.
 struct NotesCommandStrip: View {
     @Environment(\.notesTokens) private var t
     @ObservedObject var viewModel: NotesViewModel
@@ -113,33 +102,13 @@ struct NotesCommandStrip: View {
     var onExportJSON: () -> Void
     var onExportMarkdown: () -> Void
     var onImport: () -> Void
+    /// External trigger for Regions menu (status bar).
+    @Binding var regionsMenuPresented: Bool
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                themeMenu
-                fontMenu
-                textColorMenu
-                NotesToolbarDivider()
-
-                NotesToolbarIconChip(
-                    systemName: "lock.fill",
-                    title: "Lock",
-                    disabled: !viewModel.canLockSelection,
-                    action: onLock,
-                    helpText: "Lock selected text"
-                )
-                NotesToolbarIconChip(
-                    systemName: "lock.open.fill",
-                    title: "Unlock",
-                    disabled: !viewModel.canUnlockSelection,
-                    action: { viewModel.unlockSelection() },
-                    helpText: "Unlock selection"
-                )
-                regionsMenu
-
-                NotesToolbarDivider()
-
+                // Create
                 NotesToolbarIconChip(
                     systemName: "square.and.pencil",
                     title: "Note",
@@ -147,16 +116,21 @@ struct NotesCommandStrip: View {
                     action: onNewNote,
                     helpText: "New note (⌘N)"
                 )
-                NotesToolbarIconChip(
-                    systemName: "doc.badge.plus",
-                    title: "Template",
-                    action: onNewTemplate,
-                    helpText: "New template"
-                )
-                fromTemplateMenu
+                createMenu
 
                 NotesToolbarDivider()
 
+                // Write / locks
+                locksMenu
+
+                NotesToolbarDivider()
+
+                // View mode
+                editorModeMenu
+
+                NotesToolbarDivider()
+
+                // Spelling + save
                 NotesToolbarIconChip(
                     systemName: "text.badge.checkmark",
                     title: "Fix All",
@@ -173,24 +147,11 @@ struct NotesCommandStrip: View {
                     helpText: "Save (⌘S)"
                 )
 
-                Menu {
-                    if viewModel.draftIsTemplate {
-                        Button("Move to Notes") { viewModel.convertTemplateToNote() }
-                    } else if viewModel.selectedNoteID != nil {
-                        Button("Move to Templates") { viewModel.saveCurrentAsTemplate() }
-                    }
-                    Divider()
-                    Button("Export templates as JSON…") { onExportJSON() }
-                    Button("Export templates as Markdown…") { onExportMarkdown() }
-                    Button("Import templates…") { onImport() }
-                    Divider()
-                    Button("Delete", role: .destructive, action: onDelete)
-                        .disabled(viewModel.selectedNoteID == nil)
-                } label: {
-                    chipLabel(systemName: "ellipsis", title: nil)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
+                NotesToolbarDivider()
+
+                // Look + more
+                appearanceMenu
+                moreMenu
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -203,91 +164,32 @@ struct NotesCommandStrip: View {
         }
     }
 
-    private var themeMenu: some View {
+    private var createMenu: some View {
         Menu {
-            ForEach(NotesTheme.allCases) { theme in
-                Button {
-                    appearance.theme = theme
-                } label: {
-                    HStack {
-                        Circle()
-                            .fill(Color(nsColor: theme.tokens().accent))
-                            .frame(width: 8, height: 8)
-                        Text(theme.displayName)
-                        if appearance.theme == theme {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-        } label: {
-            chipLabel(systemName: "circle.lefthalf.filled", title: appearance.theme.displayName)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Theme")
-    }
-
-    private var fontMenu: some View {
-        Menu {
-            ForEach(NotesFontOption.allCases) { font in
-                Button {
-                    appearance.font = font
-                } label: {
-                    HStack {
-                        Text(font.displayName)
-                        if appearance.font == font {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
+            Button("New Template") { onNewTemplate() }
             Divider()
-            Button("Smaller") { appearance.fontSize -= 1 }
-            Button("Larger") { appearance.fontSize += 1 }
-            Text("Size: \(Int(appearance.fontSize))pt")
-        } label: {
-            chipLabel(systemName: "textformat", title: appearance.font.displayName)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Font")
-    }
-
-    private var textColorMenu: some View {
-        Menu {
-            ForEach(NotesTextColorOption.allCases) { opt in
-                Button {
-                    appearance.textColor = opt
-                } label: {
-                    HStack {
-                        Circle()
-                            .fill(swatch(for: opt))
-                            .frame(width: 8, height: 8)
-                        Text(opt.displayName)
-                        if appearance.textColor == opt {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+            if viewModel.templateNotes.isEmpty {
+                Text("No templates yet")
+            } else {
+                ForEach(viewModel.templateNotes) { tmpl in
+                    Button(tmpl.displayTitle) { onFromTemplate(tmpl.id) }
                 }
             }
         } label: {
-            chipLabel(systemName: "paintpalette", title: "Text")
+            chipLabel(systemName: "doc.badge.plus", title: "Create")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Text color")
+        .help("Template / from template")
     }
 
-    private func swatch(for opt: NotesTextColorOption) -> Color {
-        if let rgb = opt.fixedRGB {
-            return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
-        }
-        return Color(nsColor: appearance.theme.tokens().textPrimary)
-    }
-
-    private var regionsMenu: some View {
+    private var locksMenu: some View {
         Menu {
+            Button("Lock selection…") { onLock() }
+                .disabled(!viewModel.canLockSelection)
+            Button("Unlock selection") { viewModel.unlockSelection() }
+                .disabled(!viewModel.canUnlockSelection)
+            Divider()
             if viewModel.draftLockedSpans.isEmpty {
                 Text("No locked regions")
             } else {
@@ -298,29 +200,157 @@ struct NotesCommandStrip: View {
                 }
             }
         } label: {
-            chipLabel(systemName: "list.bullet.indent", title: "Regions")
+            chipLabel(systemName: "lock.fill", title: "Regions")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Jump to locked region")
-        .disabled(viewModel.draftLockedSpans.isEmpty)
+        .help("Lock / unlock / jump regions")
+        // Status-bar can request opening this menu by flipping binding —
+        // we mirror as a popover list when requested.
+        .background(regionsPopoverAnchor)
     }
 
-    private var fromTemplateMenu: some View {
+    @ViewBuilder
+    private var regionsPopoverAnchor: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .popover(isPresented: $regionsMenuPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("REGIONS")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: t.textTertiary))
+                        .padding(.bottom, 4)
+                    if viewModel.draftLockedSpans.isEmpty {
+                        Text("No locked regions")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: t.textSecondary))
+                    } else {
+                        ForEach(Array(viewModel.draftLockedSpans.enumerated()), id: \.offset) { index, span in
+                            Button {
+                                viewModel.jumpToRegion(at: index)
+                                regionsMenuPresented = false
+                            } label: {
+                                HStack {
+                                    Image(systemName: "lock.fill")
+                                    Text(span.displayLabel)
+                                    Spacer()
+                                    Text("\(span.location)+\(span.length)")
+                                        .foregroundStyle(Color(nsColor: t.textTertiary))
+                                }
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 3)
+                        }
+                    }
+                }
+                .padding(12)
+                .frame(minWidth: 220)
+                .background(Color(nsColor: t.chromeBar))
+            }
+    }
+
+    private var editorModeMenu: some View {
         Menu {
-            if viewModel.templateNotes.isEmpty {
-                Text("No templates yet")
-            } else {
-                ForEach(viewModel.templateNotes) { tmpl in
-                    Button(tmpl.displayTitle) { onFromTemplate(tmpl.id) }
+            ForEach(NoteEditorMode.allCases) { mode in
+                Button {
+                    viewModel.editorMode = mode
+                } label: {
+                    HStack {
+                        Image(systemName: mode.systemImage)
+                        Text(mode.label)
+                        if viewModel.editorMode == mode {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Cycle Source → Split → Preview") {
+                viewModel.cycleEditorMode()
+            }
+        } label: {
+            chipLabel(systemName: viewModel.editorMode.systemImage, title: viewModel.editorMode.label)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Markdown source / split / preview")
+    }
+
+    private var appearanceMenu: some View {
+        Menu {
+            Section("Theme") {
+                ForEach(NotesTheme.allCases) { theme in
+                    Button {
+                        appearance.theme = theme
+                    } label: {
+                        HStack {
+                            Circle()
+                                .fill(Color(nsColor: theme.tokens().accent))
+                                .frame(width: 8, height: 8)
+                            Text(theme.displayName)
+                            if appearance.theme == theme {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Font") {
+                ForEach(NotesFontOption.allCases) { font in
+                    Button {
+                        appearance.font = font
+                    } label: {
+                        HStack {
+                            Text(font.displayName)
+                            if appearance.font == font {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("Smaller") { appearance.fontSize -= 1 }
+                Button("Larger") { appearance.fontSize += 1 }
+            }
+            Section("Text color") {
+                ForEach(NotesTextColorOption.allCases) { opt in
+                    Button {
+                        appearance.textColor = opt
+                    } label: {
+                        Text(opt.displayName)
+                    }
                 }
             }
         } label: {
-            chipLabel(systemName: "doc.on.doc", title: "From")
+            chipLabel(systemName: "paintpalette", title: "Look")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("New note from template")
+        .help("Theme, font, text color")
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if viewModel.draftIsTemplate {
+                Button("Move to Notes") { viewModel.convertTemplateToNote() }
+            } else if viewModel.selectedNoteID != nil {
+                Button("Move to Templates") { viewModel.saveCurrentAsTemplate() }
+            }
+            Divider()
+            Button("Export templates as JSON…") { onExportJSON() }
+            Button("Export templates as Markdown…") { onExportMarkdown() }
+            Button("Import…") { onImport() }
+            Divider()
+            Button("Delete", role: .destructive, action: onDelete)
+                .disabled(viewModel.selectedNoteID == nil)
+        } label: {
+            chipLabel(systemName: "ellipsis", title: "More")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func chipLabel(systemName: String, title: String?) -> some View {
@@ -348,4 +378,3 @@ struct NotesCommandStrip: View {
         .clipShape(RoundedRectangle(cornerRadius: t.chipRadius, style: .continuous))
     }
 }
-

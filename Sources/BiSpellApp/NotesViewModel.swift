@@ -10,6 +10,30 @@ struct TemplateVariableFormState: Identifiable, Equatable {
     var values: [String: String]
 }
 
+enum NoteEditorMode: String, CaseIterable, Identifiable {
+    case source
+    case split
+    case preview
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .source: return "Source"
+        case .split: return "Split"
+        case .preview: return "Preview"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .source: return "chevron.left.forwardslash.chevron.right"
+        case .split: return "rectangle.split.2x1"
+        case .preview: return "doc.richtext"
+        }
+    }
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published private(set) var notes: [Note] = []
@@ -30,12 +54,17 @@ final class NotesViewModel: ObservableObject {
     @Published var selectedFolderFilter: String? = nil
     /// Pending variable form when instantiating a template.
     @Published var pendingVariableForm: TemplateVariableFormState?
+    /// Source | Split | Preview for markdown end-product view.
+    @Published var editorMode: NoteEditorMode = .source
 
     private let store: NotesStore
     private let engine: SpellEngine?
     private let correctionLog: CorrectionLogStore
     let editorBridge = NoteEditorBridge()
     private var checkWork: DispatchWorkItem?
+
+    /// Full-document spell-check is expensive on large markdown imports.
+    private static let fullSpellCheckUTF16Limit = 24_000
 
     init(
         store: NotesStore = NotesStore(),
@@ -439,6 +468,20 @@ final class NotesViewModel: ObservableObject {
     func jumpToRegion(at index: Int) {
         guard draftLockedSpans.indices.contains(index) else { return }
         selectedRange = draftLockedSpans[index].utf16Range
+        saveStatus = "Region \(draftLockedSpans[index].displayLabel)"
+    }
+
+    /// Status-bar action: jump to first misspelling and open suggestions.
+    func jumpToFirstMisspelling() {
+        guard let first = misspellings.first else { return }
+        let filled = fillSuggestions(first)
+        selectedRange = filled.utf16Range
+        activeSuggestion = filled.suggestions.isEmpty ? nil : filled
+        if activeSuggestion != nil {
+            saveStatus = "⌘1–⌘5 to fix “\(filled.word)”"
+        } else {
+            saveStatus = "Issue: \(filled.word)"
+        }
     }
 
     func setFolder(_ value: String) {
@@ -492,32 +535,116 @@ final class NotesViewModel: ObservableObject {
         return out
     }
 
-    func importTemplatePackJSON(_ data: Data) throws -> Int {
-        let pack = try TemplatePack.decodeJSON(data)
-        var count = 0
-        for item in pack.templates {
-            var note = item.asNewTemplateNote()
-            if !note.tags.contains(where: { $0.lowercased() == "imported" }) {
-                note.tags = NoteTagging.normalizeTags(note.tags + ["imported"])
+    /// Parse one file into notes (no UI / no spell-check). Safe off main actor for pure parsing;
+    /// call `commitImportedNotes` on main to attach.
+    nonisolated static func parseImportFile(data: Data, pathExtension: String) throws -> [Note] {
+        let ext = pathExtension.lowercased()
+        if ext == "json" {
+            let pack = try TemplatePack.decodeJSON(data)
+            guard !pack.templates.isEmpty else { throw TemplatePackError.emptyPack }
+            return pack.templates.map { item in
+                var note = item.asNewNote()
+                note.isTemplate = true
+                if !note.tags.contains(where: { $0.lowercased() == "imported" }) {
+                    note.tags = NoteTagging.normalizeTags(note.tags + ["imported"])
+                }
+                return note
             }
-            try store.save(note)
-            notes.insert(note, at: 0)
-            count += 1
         }
-        saveStatus = "Imported \(count) template(s)"
-        return count
+        if ext == "md" || ext == "markdown" || ext == "txt" {
+            guard let text = String(data: data, encoding: .utf8)
+                    ?? String(data: data, encoding: .isoLatin1) else {
+                throw TemplatePackError.invalidMarkdown
+            }
+            return [try noteFromMarkdownText(text)]
+        }
+        if let pack = try? TemplatePack.decodeJSON(data), !pack.templates.isEmpty {
+            return pack.templates.map { item in
+                var note = item.asNewNote()
+                note.isTemplate = true
+                if !note.tags.contains(where: { $0.lowercased() == "imported" }) {
+                    note.tags = NoteTagging.normalizeTags(note.tags + ["imported"])
+                }
+                return note
+            }
+        }
+        if let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("{"),
+               (trimmed.contains("bispell-template-pack") || trimmed.contains("\"templates\"")) {
+                let pack = try TemplatePack.decodeJSON(data)
+                guard !pack.templates.isEmpty else { throw TemplatePackError.emptyPack }
+                return pack.templates.map { item in
+                    var note = item.asNewNote()
+                    note.isTemplate = true
+                    if !note.tags.contains(where: { $0.lowercased() == "imported" }) {
+                        note.tags = NoteTagging.normalizeTags(note.tags + ["imported"])
+                    }
+                    return note
+                }
+            }
+            return [try noteFromMarkdownText(text)]
+        }
+        throw TemplatePackError.invalidFormat
     }
 
-    func importTemplateMarkdown(_ text: String) throws -> Int {
+    nonisolated private static func noteFromMarkdownText(_ text: String) throws -> Note {
         var item = try TemplatePack.parseMarkdown(text)
         if !item.tags.contains(where: { $0.lowercased() == "imported" }) {
             item.tags = NoteTagging.normalizeTags(item.tags + ["imported"])
         }
-        let note = item.asNewTemplateNote()
-        try store.save(note)
-        notes.insert(note, at: 0)
-        saveStatus = "Imported markdown template"
-        return 1
+        return item.asNewNote()
+    }
+
+    /// Single-file import (kept for callers); prefer batch path for multi-file.
+    func importTemplateFile(data: Data, pathExtension: String) throws -> Int {
+        let parsed = try Self.parseImportFile(data: data, pathExtension: pathExtension)
+        return try commitImportedNotes(parsed, selectFirst: true)
+    }
+
+    /// Persist many notes once, one list update, one selection, delayed spell-check.
+    @discardableResult
+    func commitImportedNotes(_ newNotes: [Note], selectFirst: Bool) throws -> Int {
+        guard !newNotes.isEmpty else { return 0 }
+        try store.saveAll(newNotes)
+        // Prepend without re-sorting the whole library on every insert.
+        notes.insert(contentsOf: newNotes, at: 0)
+        notes.sort { $0.updatedAt > $1.updatedAt }
+        if selectFirst, let first = newNotes.first {
+            selectedNoteID = first.id
+            syncDraftFromSelection()
+            isDirty = false
+            // Long delay so the UI settles before Hunspell scans a large body.
+            let delay = (draftBody as NSString).length > Self.fullSpellCheckUTF16Limit ? 1.2 : 0.4
+            scheduleSpellCheck(autoPopup: false, delay: delay)
+        }
+        let templates = newNotes.filter(\.isTemplate).count
+        let regular = newNotes.count - templates
+        if templates > 0, regular > 0 {
+            saveStatus = "Imported \(newNotes.count) (\(templates) templates, \(regular) notes)"
+        } else if templates > 0 {
+            saveStatus = "Imported \(templates) template(s)"
+        } else {
+            saveStatus = "Imported \(regular) note(s)"
+        }
+        return newNotes.count
+    }
+
+    func importTemplatePackJSON(_ data: Data) throws -> Int {
+        try importTemplateFile(data: data, pathExtension: "json")
+    }
+
+    func importTemplateMarkdown(_ text: String) throws -> Int {
+        try commitImportedNotes([try Self.noteFromMarkdownText(text)], selectFirst: true)
+    }
+
+    func cycleEditorMode() {
+        switch editorMode {
+        case .source: editorMode = .split
+        case .split: editorMode = .preview
+        case .preview: editorMode = .source
+        }
     }
 
     func save() { persistDraftNow() }
@@ -666,13 +793,24 @@ final class NotesViewModel: ObservableObject {
 
     private func runSpellCheck(autoPopup: Bool) {
         guard let engine else { return }
+        // Preview-only: no need to spell-check the whole document constantly.
+        if editorMode == .preview {
+            return
+        }
         let text = draftBody
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             misspellings = []
             activeSuggestion = nil
             return
         }
-        let result = engine.check(text: text, nearCaretOnly: false)
+        // Large markdown: near-caret only keeps UI responsive after import/open.
+        let utf16Len = (text as NSString).length
+        let nearOnly = utf16Len > Self.fullSpellCheckUTF16Limit
+        let result = engine.check(
+            text: text,
+            caretUTF16: selectedRange.location,
+            nearCaretOnly: nearOnly
+        )
         // Ignore issues inside locked spans (templates shouldn't nag).
         misspellings = result.misspellings.filter { miss in
             !LockedSpanMath.anyBlocks(draftLockedSpans, edit: miss.utf16Range)

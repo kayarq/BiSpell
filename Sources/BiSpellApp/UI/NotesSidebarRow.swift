@@ -7,6 +7,7 @@ struct NotesSidebarRow: View {
     var isTemplate: Bool
     var isSelected: Bool
     var isDirty: Bool
+    var taxonomy: TaxonomyController
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -46,6 +47,37 @@ struct NotesSidebarRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color(nsColor: t.textSecondary))
                     .lineLimit(2)
+
+                // Folder + tags color row
+                if note.folder != nil || !note.tags.isEmpty {
+                    HStack(spacing: 5) {
+                        if let folder = note.folder, !folder.isEmpty {
+                            HStack(spacing: 3) {
+                                TaxonomyColorDot(palette: taxonomy.folderPalette(folder), size: 6)
+                                Text(folder)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(Color(nsColor: taxonomy.folderNSColor(folder)))
+                                    .lineLimit(1)
+                            }
+                        }
+                        ForEach(note.tags.prefix(4), id: \.self) { tag in
+                            HStack(spacing: 3) {
+                                TaxonomyColorDot(palette: taxonomy.tagPalette(tag), size: 6)
+                                Text(tag)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(Color(nsColor: taxonomy.tagNSColor(tag)))
+                                    .lineLimit(1)
+                            }
+                        }
+                        if note.tags.count > 4 {
+                            Text("+\(note.tags.count - 4)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(Color(nsColor: t.textTertiary))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+
                 Text(note.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Color(nsColor: t.textTertiary))

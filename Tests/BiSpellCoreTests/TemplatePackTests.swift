@@ -45,4 +45,47 @@ final class TemplatePackTests: XCTestCase {
         let tags = NoteTagging.normalizeTags([" Work ", "work", "Email", "email "])
         XCTAssertEqual(tags.count, 2)
     }
+
+    func testJSONDecodeAcceptsFractionalSeconds() throws {
+        let json = """
+        {
+          "format": "bispell-template-pack",
+          "version": 1,
+          "exportedAt": "2026-07-08T12:34:56.789Z",
+          "templates": [
+            {
+              "title": "Frac",
+              "body": "hi",
+              "lockedSpans": [],
+              "tags": []
+            }
+          ]
+        }
+        """
+        let pack = try TemplatePack.decodeJSON(Data(json.utf8))
+        XCTAssertEqual(pack.templates.count, 1)
+        XCTAssertEqual(pack.templates[0].title, "Frac")
+    }
+
+    func testMarkdownWithoutFrontMatterStillImports() throws {
+        let item = try TemplatePack.parseMarkdown("# Hello doc\n\nJust a body\nwith lines\n")
+        XCTAssertEqual(item.title, "Hello doc")
+        XCTAssertTrue(item.body.contains("Just a body"))
+        XCTAssertFalse(item.isTemplate, "plain markdown should import as a regular note")
+    }
+
+    func testPreviewBodyStripsFrontMatter() {
+        let md = """
+        ---
+        title: T
+        bispell-template: true
+        ---
+
+        # Visible
+        body
+        """
+        let preview = TemplatePack.previewBody(from: md)
+        XCTAssertFalse(preview.contains("bispell-template"))
+        XCTAssertTrue(preview.contains("# Visible"))
+    }
 }

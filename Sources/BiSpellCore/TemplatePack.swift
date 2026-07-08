@@ -6,19 +6,23 @@ public struct TemplatePackItem: Codable, Equatable, Sendable {
     public var lockedSpans: [LockedSpan]
     public var folder: String?
     public var tags: [String]
+    /// When false, import as a regular note (plain .md without pack front matter).
+    public var isTemplate: Bool
 
     public init(
         title: String,
         body: String,
         lockedSpans: [LockedSpan] = [],
         folder: String? = nil,
-        tags: [String] = []
+        tags: [String] = [],
+        isTemplate: Bool = true
     ) {
         self.title = title
         self.body = body
         self.lockedSpans = lockedSpans
         self.folder = folder
         self.tags = tags
+        self.isTemplate = isTemplate
     }
 
     public init(note: Note) {
@@ -27,17 +31,40 @@ public struct TemplatePackItem: Codable, Equatable, Sendable {
         self.lockedSpans = note.lockedSpans
         self.folder = note.folder
         self.tags = note.tags
+        self.isTemplate = note.isTemplate
     }
 
-    public func asNewTemplateNote() -> Note {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decode(String.self, forKey: .title)
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+        lockedSpans = try c.decodeIfPresent([LockedSpan].self, forKey: .lockedSpans) ?? []
+        folder = try c.decodeIfPresent(String.self, forKey: .folder)
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        // JSON packs are always templates unless explicitly marked otherwise.
+        isTemplate = try c.decodeIfPresent(Bool.self, forKey: .isTemplate) ?? true
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case title, body, lockedSpans, folder, tags, isTemplate
+    }
+
+    public func asNewNote() -> Note {
         Note(
             title: title,
             body: body,
-            isTemplate: true,
+            isTemplate: isTemplate,
             lockedSpans: lockedSpans,
             folder: folder,
             tags: tags
         )
+    }
+
+    /// Backward-compatible alias.
+    public func asNewTemplateNote() -> Note {
+        var n = asNewNote()
+        n.isTemplate = true
+        return n
     }
 }
 
@@ -67,9 +94,32 @@ public enum TemplatePack {
 
     public static func decodeJSON(_ data: Data) throws -> TemplatePackFile {
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
-        let pack = try dec.decode(TemplatePackFile.self, from: data)
-        guard pack.format == TemplatePackFile.formatID || pack.version >= 1 else {
+        // Accept both plain and fractional-second ISO-8601 (encoder may emit either).
+        dec.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            let withFrac = ISO8601DateFormatter()
+            withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = withFrac.date(from: raw) { return d }
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            if let d = plain.date(from: raw) { return d }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid date: \(raw)"
+            )
+        }
+        let pack: TemplatePackFile
+        do {
+            pack = try dec.decode(TemplatePackFile.self, from: data)
+        } catch {
+            throw TemplatePackError.decodeFailed(error.localizedDescription)
+        }
+        // Require our format id when present; allow version-only packs for older drafts.
+        if !pack.format.isEmpty && pack.format != TemplatePackFile.formatID && pack.version < 1 {
+            throw TemplatePackError.invalidFormat
+        }
+        if pack.format != TemplatePackFile.formatID && pack.templates.isEmpty {
             throw TemplatePackError.invalidFormat
         }
         return pack
@@ -113,8 +163,16 @@ public enum TemplatePack {
     public static func parseMarkdown(_ text: String) throws -> TemplatePackItem {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         guard normalized.hasPrefix("---\n") || normalized.hasPrefix("---\r") else {
-            // Whole file as body
-            return TemplatePackItem(title: "Imported", body: text, lockedSpans: [], folder: nil, tags: ["imported"])
+            // Plain markdown → regular note (editable + preview), not a template pack.
+            let title = firstHeadingTitle(in: normalized) ?? "Imported"
+            return TemplatePackItem(
+                title: title,
+                body: text,
+                lockedSpans: [],
+                folder: nil,
+                tags: ["imported"],
+                isTemplate: false
+            )
         }
         guard let endRange = normalized.range(of: "\n---\n", range: normalized.index(normalized.startIndex, offsetBy: 4)..<normalized.endIndex) else {
             throw TemplatePackError.invalidMarkdown
@@ -127,6 +185,8 @@ public enum TemplatePack {
         var folder: String?
         var tags: [String] = []
         var locks: [LockedSpan] = []
+        var isTemplate = false
+        var sawTemplateFlag = false
         var inLocks = false
         var pendingLabel: String?
         var pendingStart: Int?
@@ -183,17 +243,59 @@ public enum TemplatePack {
                 folder = NoteTagging.normalizeFolder(yamlValue(after: "folder:", in: trimmed))
             } else if trimmed.hasPrefix("tags:") {
                 tags = parseTagsLine(String(trimmed.dropFirst(5)))
+            } else if trimmed.hasPrefix("bispell-template:") {
+                sawTemplateFlag = true
+                let v = (yamlValue(after: "bispell-template:", in: trimmed) ?? "").lowercased()
+                isTemplate = (v == "true" || v == "yes" || v == "1")
             }
         }
         flushLock()
+        // Pack-exported MD always has bispell-template; locks imply template too.
+        if !sawTemplateFlag {
+            isTemplate = !locks.isEmpty
+        }
+
+        if title == "Imported" {
+            title = firstHeadingTitle(in: body) ?? title
+        }
 
         return TemplatePackItem(
             title: title,
             body: body,
             lockedSpans: LockedSpanMath.normalize(locks),
             folder: folder,
-            tags: NoteTagging.normalizeTags(tags)
+            tags: NoteTagging.normalizeTags(tags),
+            isTemplate: isTemplate
         )
+    }
+
+    /// Body shown in the end-product markdown preview (YAML front matter stripped).
+    public static func previewBody(from text: String) -> String {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        guard normalized.hasPrefix("---\n") else { return text }
+        guard let endRange = normalized.range(
+            of: "\n---\n",
+            range: normalized.index(normalized.startIndex, offsetBy: 4)..<normalized.endIndex
+        ) else {
+            return text
+        }
+        return String(normalized[endRange.upperBound...])
+    }
+
+    private static func firstHeadingTitle(in text: String) -> String? {
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).prefix(40) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("# ") {
+                let title = t.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty { return String(title.prefix(80)) }
+            }
+        }
+        // First non-empty line as fallback title
+        for line in text.split(whereSeparator: \.isNewline).prefix(10) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { return String(t.prefix(80)) }
+        }
+        return nil
     }
 
     public static func safeFileName(for title: String) -> String {
@@ -242,11 +344,15 @@ public enum TemplatePack {
 public enum TemplatePackError: Error, LocalizedError {
     case invalidFormat
     case invalidMarkdown
+    case emptyPack
+    case decodeFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidFormat: return "Not a BiSpell template pack"
         case .invalidMarkdown: return "Invalid template markdown front matter"
+        case .emptyPack: return "Template pack contains no templates"
+        case .decodeFailed(let detail): return "Could not read pack JSON (\(detail))"
         }
     }
 }

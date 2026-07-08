@@ -6,9 +6,13 @@ struct NotesStatusPill: View {
     let text: String
     var accent: Bool = false
     var warning: Bool = false
+    var interactive: Bool = false
+    var action: (() -> Void)? = nil
+
+    @State private var hovering = false
 
     var body: some View {
-        Text(text)
+        let label = Text(text)
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundStyle(Color(nsColor: warning ? t.dirty : (accent ? t.accentBright : t.textSecondary)))
             .padding(.horizontal, 7)
@@ -16,9 +20,32 @@ struct NotesStatusPill: View {
             .background(Color(nsColor: accent || warning ? t.accentDim : t.elevated))
             .overlay(
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(Color(nsColor: t.borderSubtle), lineWidth: 1)
+                    .strokeBorder(
+                        Color(nsColor: hovering && interactive ? t.accent : t.borderSubtle),
+                        lineWidth: 1
+                    )
             )
             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .opacity(hovering && interactive ? 0.92 : 1)
+
+        Group {
+            if let action, interactive {
+                Button(action: action) { label }
+                    .buttonStyle(.plain)
+                    .onHover { hovering = $0 }
+                    .help(helpText)
+            } else {
+                label
+            }
+        }
+    }
+
+    private var helpText: String {
+        if text.contains("unsaved") { return "Click to save" }
+        if text.contains("issues") { return "Jump to first issue" }
+        if text.contains("locked") { return "Open regions" }
+        if text.contains("spell ok") { return "No spelling issues" }
+        return text
     }
 }
 
@@ -26,18 +53,34 @@ struct NotesStatusBar: View {
     @Environment(\.notesTokens) private var t
     @ObservedObject var viewModel: NotesViewModel
     @ObservedObject var appearance: NotesAppearanceController
+    var onOpenRegions: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
             if viewModel.isDirty {
-                NotesStatusPill(text: "[unsaved]", warning: true)
+                NotesStatusPill(
+                    text: "[unsaved]",
+                    warning: true,
+                    interactive: true,
+                    action: { viewModel.save() }
+                )
             }
             if !viewModel.draftLockedSpans.isEmpty {
-                NotesStatusPill(text: "[\(viewModel.draftLockedSpans.count) locked]", accent: true)
+                NotesStatusPill(
+                    text: "[\(viewModel.draftLockedSpans.count) locked]",
+                    accent: true,
+                    interactive: true,
+                    action: onOpenRegions
+                )
             }
             if viewModel.draftIsTemplate {
                 NotesStatusPill(text: "[template]", accent: true)
             }
+            NotesStatusPill(
+                text: "[\(viewModel.editorMode.label.lowercased())]",
+                interactive: true,
+                action: { viewModel.cycleEditorMode() }
+            )
             if let active = viewModel.activeSuggestion {
                 NotesStatusPill(text: "[⌘1–5: \(active.word)]", accent: true)
             } else if viewModel.misspellings.isEmpty {
@@ -45,7 +88,12 @@ struct NotesStatusBar: View {
                     NotesStatusPill(text: "[spell ok]")
                 }
             } else {
-                NotesStatusPill(text: "[\(viewModel.misspellings.count) issues]", warning: true)
+                NotesStatusPill(
+                    text: "[\(viewModel.misspellings.count) issues]",
+                    warning: true,
+                    interactive: true,
+                    action: { viewModel.jumpToFirstMisspelling() }
+                )
             }
 
             Spacer()

@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import BiSpellCore
 
 struct NotesRootView: View {
     @ObservedObject var viewModel: NotesViewModel
     @ObservedObject var appearance: NotesAppearanceController
+    @StateObject private var taxonomy = TaxonomyController()
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var confirmDelete = false
@@ -19,7 +21,9 @@ struct NotesRootView: View {
     @State private var showExportJSON = false
     @State private var exportMarkdownFiles: [(String, String)] = []
     @State private var showExportMarkdown = false
-    @State private var showImporter = false
+    @State private var regionsMenuPresented = false
+    @State private var foldersExpanded = true
+    @State private var tagsExpanded = true
 
     private var tokens: NotesThemeTokens {
         appearance.tokens(colorScheme: colorScheme)
@@ -122,70 +126,132 @@ struct NotesRootView: View {
             contentType: .json,
             defaultFilename: "bispell-templates"
         ) { _ in }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.json, .plainText, .text],
-            allowsMultipleSelection: true
-        ) { result in
-            handleImport(result)
-        }
     }
 
+    /// Collapsible folder + tag filter sections (top of sidebar).
     private var filterChips: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !viewModel.allFolders.isEmpty {
+        VStack(alignment: .leading, spacing: 0) {
+            // Folders section
+            filterSectionHeader(
+                title: "folders",
+                count: viewModel.allFolders.count,
+                expanded: $foldersExpanded,
+                active: viewModel.selectedFolderFilter != nil
+            ) {
+                viewModel.selectedFolderFilter = nil
+            }
+            if foldersExpanded {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        chip("all folders", selected: viewModel.selectedFolderFilter == nil) {
+                        TaxonomyChip(
+                            title: "all",
+                            palette: .slate,
+                            selected: viewModel.selectedFolderFilter == nil,
+                            showDot: false
+                        ) {
                             viewModel.selectedFolderFilter = nil
                         }
                         ForEach(viewModel.allFolders, id: \.self) { folder in
-                            chip(folder, selected: viewModel.selectedFolderFilter == folder) {
-                                viewModel.selectedFolderFilter =
-                                    viewModel.selectedFolderFilter == folder ? nil : folder
-                            }
+                            TaxonomyChip(
+                                title: folder,
+                                palette: taxonomy.folderPalette(folder),
+                                selected: viewModel.selectedFolderFilter == folder,
+                                action: {
+                                    viewModel.selectedFolderFilter =
+                                        viewModel.selectedFolderFilter == folder ? nil : folder
+                                },
+                                onColorPick: { taxonomy.setFolderColor($0, for: folder) }
+                            )
                         }
                     }
                     .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
                 }
             }
-            if !viewModel.allTags.isEmpty {
+
+            Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
+
+            // Tags section
+            filterSectionHeader(
+                title: "tags",
+                count: viewModel.allTags.count,
+                expanded: $tagsExpanded,
+                active: !viewModel.selectedTagFilters.isEmpty
+            ) {
+                viewModel.clearTagFilters()
+            }
+            if tagsExpanded {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         if !viewModel.selectedTagFilters.isEmpty {
-                            chip("clear tags", selected: false) {
+                            TaxonomyChip(
+                                title: "clear",
+                                palette: .slate,
+                                selected: false,
+                                showDot: false
+                            ) {
                                 viewModel.clearTagFilters()
                             }
                         }
                         ForEach(viewModel.allTags, id: \.self) { tag in
-                            chip(tag, selected: viewModel.selectedTagFilters.contains(tag)) {
-                                viewModel.toggleTagFilter(tag)
-                            }
+                            TaxonomyChip(
+                                title: tag,
+                                palette: taxonomy.tagPalette(tag),
+                                selected: viewModel.selectedTagFilters.contains(tag),
+                                action: { viewModel.toggleTagFilter(tag) },
+                                onColorPick: { taxonomy.setTagColor($0, for: tag) }
+                            )
                         }
                     }
                     .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
                 }
             }
         }
-        .padding(.vertical, 6)
         .background(Color(nsColor: tokens.sidebar))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
+        }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(nsColor: selected ? tokens.accentBright : tokens.textSecondary))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: selected ? tokens.accentDim : tokens.elevated))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(Color(nsColor: tokens.borderSubtle), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+    private func filterSectionHeader(
+        title: String,
+        count: Int,
+        expanded: Binding<Bool>,
+        active: Bool,
+        onClear: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    expanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: expanded.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                        .frame(width: 10)
+                    Text(title.uppercased())
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(Color(nsColor: active ? tokens.accentBright : tokens.textSecondary))
+                    Text("\(count)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            if active {
+                Button("clear", action: onClear)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(Color(nsColor: tokens.accent))
+                    .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private func exportJSON() {
@@ -226,29 +292,77 @@ struct NotesRootView: View {
         }
     }
 
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure:
-            viewModel.saveStatus = "Import cancelled"
-        case .success(let urls):
-            var count = 0
+    /// Use AppKit open panel — SwiftUI `.fileImporter` often fails to present when
+    /// triggered from a toolbar `Menu` (state tears down with the menu).
+    private func openImportPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Import"
+        panel.message = "Choose BiSpell template pack (.json) or template markdown (.md)"
+        var types: [UTType] = [.json, .plainText, .text, .data]
+        if let md = UTType(filenameExtension: "md") { types.append(md) }
+        if let markdown = UTType(filenameExtension: "markdown") { types.append(markdown) }
+        if let yaml = UTType(filenameExtension: "yaml") { types.append(yaml) }
+        panel.allowedContentTypes = types
+        panel.allowsOtherFileTypes = true
+        panel.begin { resp in
+            guard resp == .OK else {
+                DispatchQueue.main.async {
+                    viewModel.saveStatus = "Import cancelled"
+                }
+                return
+            }
+            let urls = panel.urls
+            DispatchQueue.main.async {
+                importTemplateFiles(urls)
+            }
+        }
+    }
+
+    private func importTemplateFiles(_ urls: [URL]) {
+        viewModel.saveStatus = "Importing \(urls.count) file(s)…"
+        // Read + parse off the main thread; commit once (avoids per-file spell-check stalls).
+        Task.detached(priority: .userInitiated) {
+            var parsed: [Note] = []
+            var errors: [String] = []
             for url in urls {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 do {
                     let data = try Data(contentsOf: url)
-                    if url.pathExtension.lowercased() == "json" {
-                        count += try viewModel.importTemplatePackJSON(data)
-                    } else if let text = String(data: data, encoding: .utf8) {
-                        count += try viewModel.importTemplateMarkdown(text)
+                    let notes = try NotesViewModel.parseImportFile(
+                        data: data,
+                        pathExtension: url.pathExtension
+                    )
+                    parsed.append(contentsOf: notes)
+                } catch {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            let imported = parsed
+            let importErrors = errors
+            let largeBodies = imported.contains { ($0.body as NSString).length > 4_000 }
+            await MainActor.run {
+                do {
+                    let count = try viewModel.commitImportedNotes(imported, selectFirst: true)
+                    viewModel.selectedFolderFilter = nil
+                    viewModel.clearTagFilters()
+                    // Prefer split so large MD imports feel instant and show end product.
+                    if count > 0, largeBodies {
+                        viewModel.editorMode = .split
+                    }
+                    if count == 0, !importErrors.isEmpty {
+                        viewModel.saveStatus = "Import failed: \(importErrors.joined(separator: "; "))"
+                    } else if count > 0, !importErrors.isEmpty {
+                        viewModel.saveStatus += " · some failed: \(importErrors.joined(separator: "; "))"
+                    } else if count == 0 {
+                        viewModel.saveStatus = "No notes found in selected file(s)"
                     }
                 } catch {
                     viewModel.saveStatus = "Import failed: \(error.localizedDescription)"
-                    return
                 }
-            }
-            if count > 0 {
-                viewModel.saveStatus = "Imported \(count) template(s)"
             }
         }
     }
@@ -272,6 +386,11 @@ struct NotesRootView: View {
                 Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
             }
 
+            // Filters first (collapsible folders + tags)
+            if !viewModel.allFolders.isEmpty || !viewModel.allTags.isEmpty {
+                filterChips
+            }
+
             List(selection: Binding(
                 get: { viewModel.selectedNoteID },
                 set: { attemptSelect($0) }
@@ -282,7 +401,8 @@ struct NotesRootView: View {
                             note: note,
                             isTemplate: false,
                             isSelected: viewModel.selectedNoteID == note.id,
-                            isDirty: viewModel.selectedNoteID == note.id && viewModel.isDirty
+                            isDirty: viewModel.selectedNoteID == note.id && viewModel.isDirty,
+                            taxonomy: taxonomy
                         )
                         .tag(note.id)
                         .listRowBackground(Color(nsColor: tokens.sidebar))
@@ -299,7 +419,8 @@ struct NotesRootView: View {
                             note: note,
                             isTemplate: true,
                             isSelected: viewModel.selectedNoteID == note.id,
-                            isDirty: viewModel.selectedNoteID == note.id && viewModel.isDirty
+                            isDirty: viewModel.selectedNoteID == note.id && viewModel.isDirty,
+                            taxonomy: taxonomy
                         )
                         .tag(note.id)
                         .listRowBackground(Color(nsColor: tokens.sidebar))
@@ -314,8 +435,6 @@ struct NotesRootView: View {
             .scrollContentBackground(.hidden)
             .background(Color(nsColor: tokens.sidebar))
             .searchable(text: $viewModel.searchText, prompt: "search…")
-
-            filterChips
 
             if viewModel.regularNotes.isEmpty && viewModel.templateNotes.isEmpty {
                 Text("// empty — create a note")
@@ -351,6 +470,88 @@ struct NotesRootView: View {
     }
 
     @ViewBuilder
+    private var editorWorkspace: some View {
+        let source = noteSourceEditor
+        let preview = MarkdownPreviewView(
+            markdown: viewModel.draftBody,
+            tokens: tokens,
+            pointSize: appearance.bodyFont().pointSize
+        )
+        switch viewModel.editorMode {
+        case .source:
+            source
+        case .preview:
+            preview
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color(nsColor: tokens.borderSubtle), lineWidth: 1)
+                )
+        case .split:
+            HSplitView {
+                source
+                    .frame(minWidth: 220)
+                preview
+                    .frame(minWidth: 220)
+            }
+        }
+    }
+
+    private var noteSourceEditor: some View {
+        NoteTextEditor(
+            editorBridge: viewModel.editorBridge,
+            text: viewModel.bodyBinding,
+            selectedRange: $viewModel.selectedRange,
+            activeMisspelling: viewModel.activeSuggestion,
+            lockedSpans: viewModel.draftLockedSpans,
+            editorFont: appearance.bodyFont(),
+            textColor: tokens.textPrimary,
+            backgroundColor: tokens.editor,
+            lockedBackgroundColor: tokens.lockFill,
+            lockedTextColor: tokens.lockText,
+            accentColor: tokens.accent,
+            borderColor: tokens.borderStrong,
+            onEditingChanged: {
+                viewModel.markDirtyFromEditor()
+            },
+            onWordBoundary: {
+                viewModel.handleWordBoundary()
+            },
+            onCommandNumber: { n in
+                viewModel.applySuggestionShortcut(number: n)
+            },
+            onApplySuggestion: { suggestion, miss in
+                viewModel.applySuggestion(suggestion, for: miss)
+            },
+            onDismissSuggestions: {
+                viewModel.dismissSuggestions()
+            },
+            canEdit: { range, rep in
+                viewModel.canEdit(range: range, replacement: rep)
+            },
+            commitEditorChange: { newText, edited, replacement, preSpans in
+                viewModel.commitEditorChange(
+                    newText: newText,
+                    edited: edited,
+                    replacement: replacement,
+                    previousSpans: preSpans
+                )
+            },
+            smartDelete: { range in
+                viewModel.smartDelete(range: range)
+            },
+            currentLockedSpans: {
+                viewModel.draftLockedSpans
+            },
+            onBlockedEdit: {
+                viewModel.notifyBlockedEdit()
+            },
+            restoreSnapshot: { text, spans, sel in
+                viewModel.restoreSnapshot(text: text, spans: spans, selection: sel)
+            }
+        )
+    }
+
+    @ViewBuilder
     private var detail: some View {
         if viewModel.selectedNoteID != nil {
             VStack(spacing: 0) {
@@ -364,10 +565,11 @@ struct NotesRootView: View {
                     onLock: { showLockLabelSheet = true },
                     onExportJSON: exportJSON,
                     onExportMarkdown: exportMarkdown,
-                    onImport: { showImporter = true }
+                    onImport: openImportPanel,
+                    regionsMenuPresented: $regionsMenuPresented
                 )
 
-                // Title + metadata
+                // Title + metadata (folder/tags with suggestions + colors)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 10) {
                         Text("›")
@@ -379,28 +581,36 @@ struct NotesRootView: View {
                             .foregroundStyle(Color(nsColor: tokens.textPrimary))
                         Spacer()
                     }
-                    HStack(spacing: 10) {
-                        Text("folder")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Color(nsColor: tokens.textTertiary))
-                        TextField("optional", text: Binding(
-                            get: { viewModel.draftFolder },
-                            set: { viewModel.setFolder($0) }
-                        ))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
-                        .frame(maxWidth: 140)
-                        Text("tags")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Color(nsColor: tokens.textTertiary))
-                        TextField("a, b, c", text: Binding(
-                            get: { viewModel.draftTagsText },
-                            set: { viewModel.setTagsText($0) }
-                        ))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                    HStack(alignment: .top, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("folder")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                            FolderPickerField(
+                                folder: Binding(
+                                    get: { viewModel.draftFolder },
+                                    set: { viewModel.setFolder($0) }
+                                ),
+                                knownFolders: viewModel.allFolders,
+                                taxonomy: taxonomy,
+                                onChange: { viewModel.setFolder($0) }
+                            )
+                            .frame(minWidth: 140, maxWidth: 200)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("tags")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                            TagsPickerField(
+                                tagsText: Binding(
+                                    get: { viewModel.draftTagsText },
+                                    set: { viewModel.setTagsText($0) }
+                                ),
+                                knownTags: viewModel.allTags,
+                                taxonomy: taxonomy,
+                                onChange: { viewModel.setTagsText($0) }
+                            )
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
@@ -410,62 +620,15 @@ struct NotesRootView: View {
                     Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
                 }
 
-                NoteTextEditor(
-                    editorBridge: viewModel.editorBridge,
-                    text: viewModel.bodyBinding,
-                    selectedRange: $viewModel.selectedRange,
-                    activeMisspelling: viewModel.activeSuggestion,
-                    lockedSpans: viewModel.draftLockedSpans,
-                    editorFont: appearance.bodyFont(),
-                    textColor: tokens.textPrimary,
-                    backgroundColor: tokens.editor,
-                    lockedBackgroundColor: tokens.lockFill,
-                    lockedTextColor: tokens.lockText,
-                    accentColor: tokens.accent,
-                    borderColor: tokens.borderStrong,
-                    onEditingChanged: {
-                        viewModel.markDirtyFromEditor()
-                    },
-                    onWordBoundary: {
-                        viewModel.handleWordBoundary()
-                    },
-                    onCommandNumber: { n in
-                        viewModel.applySuggestionShortcut(number: n)
-                    },
-                    onApplySuggestion: { suggestion, miss in
-                        viewModel.applySuggestion(suggestion, for: miss)
-                    },
-                    onDismissSuggestions: {
-                        viewModel.dismissSuggestions()
-                    },
-                    canEdit: { range, rep in
-                        viewModel.canEdit(range: range, replacement: rep)
-                    },
-                    commitEditorChange: { newText, edited, replacement, preSpans in
-                        viewModel.commitEditorChange(
-                            newText: newText,
-                            edited: edited,
-                            replacement: replacement,
-                            previousSpans: preSpans
-                        )
-                    },
-                    smartDelete: { range in
-                        viewModel.smartDelete(range: range)
-                    },
-                    currentLockedSpans: {
-                        viewModel.draftLockedSpans
-                    },
-                    onBlockedEdit: {
-                        viewModel.notifyBlockedEdit()
-                    },
-                    restoreSnapshot: { text, spans, sel in
-                        viewModel.restoreSnapshot(text: text, spans: spans, selection: sel)
-                    }
-                )
-                .padding(.horizontal, 4)
-                .padding(.bottom, 2)
+                editorWorkspace
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 2)
 
-                NotesStatusBar(viewModel: viewModel, appearance: appearance)
+                NotesStatusBar(
+                    viewModel: viewModel,
+                    appearance: appearance,
+                    onOpenRegions: { regionsMenuPresented = true }
+                )
             }
             .background(Color(nsColor: tokens.editor))
         } else {
