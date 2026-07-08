@@ -109,6 +109,10 @@ struct NotesCommandStrip: View {
     var onNewTemplate: () -> Void
     var onFromTemplate: (UUID) -> Void
     var onDelete: () -> Void
+    var onLock: () -> Void
+    var onExportJSON: () -> Void
+    var onExportMarkdown: () -> Void
+    var onImport: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -122,7 +126,7 @@ struct NotesCommandStrip: View {
                     systemName: "lock.fill",
                     title: "Lock",
                     disabled: !viewModel.canLockSelection,
-                    action: { viewModel.lockSelection() },
+                    action: onLock,
                     helpText: "Lock selected text"
                 )
                 NotesToolbarIconChip(
@@ -132,6 +136,7 @@ struct NotesCommandStrip: View {
                     action: { viewModel.unlockSelection() },
                     helpText: "Unlock selection"
                 )
+                regionsMenu
 
                 NotesToolbarDivider()
 
@@ -174,6 +179,11 @@ struct NotesCommandStrip: View {
                     } else if viewModel.selectedNoteID != nil {
                         Button("Move to Templates") { viewModel.saveCurrentAsTemplate() }
                     }
+                    Divider()
+                    Button("Export templates as JSON…") { onExportJSON() }
+                    Button("Export templates as Markdown…") { onExportMarkdown() }
+                    Button("Import templates…") { onImport() }
+                    Divider()
                     Button("Delete", role: .destructive, action: onDelete)
                         .disabled(viewModel.selectedNoteID == nil)
                 } label: {
@@ -274,6 +284,26 @@ struct NotesCommandStrip: View {
             return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
         }
         return Color(nsColor: appearance.theme.tokens().textPrimary)
+    }
+
+    private var regionsMenu: some View {
+        Menu {
+            if viewModel.draftLockedSpans.isEmpty {
+                Text("No locked regions")
+            } else {
+                ForEach(Array(viewModel.draftLockedSpans.enumerated()), id: \.offset) { index, span in
+                    Button("\(span.displayLabel)  [\(span.location)+\(span.length)]") {
+                        viewModel.jumpToRegion(at: index)
+                    }
+                }
+            }
+        } label: {
+            chipLabel(systemName: "list.bullet.indent", title: "Regions")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Jump to locked region")
+        .disabled(viewModel.draftLockedSpans.isEmpty)
     }
 
     private var fromTemplateMenu: some View {

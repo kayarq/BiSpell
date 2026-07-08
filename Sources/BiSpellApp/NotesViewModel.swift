@@ -3,6 +3,13 @@ import SwiftUI
 import Combine
 import BiSpellCore
 
+struct TemplateVariableFormState: Identifiable, Equatable {
+    let id = UUID()
+    let templateID: UUID
+    let keys: [String]
+    var values: [String: String]
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published private(set) var notes: [Note] = []
@@ -17,6 +24,12 @@ final class NotesViewModel: ObservableObject {
     @Published var draftBody: String = ""
     @Published var draftLockedSpans: [LockedSpan] = []
     @Published private(set) var draftIsTemplate: Bool = false
+    @Published var draftFolder: String = ""
+    @Published var draftTagsText: String = ""
+    @Published var selectedTagFilters: Set<String> = []
+    @Published var selectedFolderFilter: String? = nil
+    /// Pending variable form when instantiating a template.
+    @Published var pendingVariableForm: TemplateVariableFormState?
 
     private let store: NotesStore
     private let engine: SpellEngine?
@@ -41,6 +54,25 @@ final class NotesViewModel: ObservableObject {
 
     var templateNotes: [Note] {
         filterList(notes.filter(\.isTemplate))
+    }
+
+    var allTags: [String] {
+        var set = Set<String>()
+        for n in notes {
+            for tag in n.tags { set.insert(tag) }
+        }
+        // also draft tags
+        for tag in NoteTagging.parseTagString(draftTagsText) { set.insert(tag) }
+        return set.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    var allFolders: [String] {
+        var set = Set<String>()
+        for n in notes {
+            if let f = n.folder { set.insert(f) }
+        }
+        if let f = NoteTagging.normalizeFolder(draftFolder) { set.insert(f) }
+        return set.sorted()
     }
 
     var selectedNote: Note? {
@@ -106,18 +138,56 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    /// New regular note cloned from a template (body + locked spans).
-    /// Returns false if current draft is dirty (caller should confirm first).
+    /// Start create-from-template. May open variable form. Returns false if dirty (unless force).
     @discardableResult
     func createNoteFromTemplate(_ templateID: UUID, force: Bool = false) -> Bool {
         if isDirty, !force { return false }
         guard let template = notes.first(where: { $0.id == templateID && $0.isTemplate }) else { return false }
         if isDirty { persistDraftNow() }
-        var note = Note(
-            title: template.title == "Untitled template" ? "Untitled" : template.title,
+
+        let keys = TemplateVariables.orderedKeysUnlocked(in: template.body, locks: template.lockedSpans)
+        if keys.isEmpty {
+            return finalizeNoteFromTemplate(template, values: [:])
+        }
+        var vals: [String: String] = [:]
+        for k in keys { vals[k] = "" }
+        pendingVariableForm = TemplateVariableFormState(templateID: templateID, keys: keys, values: vals)
+        return true
+    }
+
+    func cancelVariableForm() {
+        pendingVariableForm = nil
+    }
+
+    func submitVariableForm(values: [String: String]) {
+        guard let form = pendingVariableForm,
+              let template = notes.first(where: { $0.id == form.templateID && $0.isTemplate }) else {
+            pendingVariableForm = nil
+            return
+        }
+        pendingVariableForm = nil
+        _ = finalizeNoteFromTemplate(template, values: values)
+    }
+
+    @discardableResult
+    private func finalizeNoteFromTemplate(_ template: Note, values: [String: String]) -> Bool {
+        let filled = TemplateVariables.fill(
             body: template.body,
+            locks: template.lockedSpans,
+            values: values
+        )
+        let title: String = {
+            let t = template.title
+            if t == "Untitled template" || t.isEmpty { return "Untitled" }
+            return t
+        }()
+        var note = Note(
+            title: title,
+            body: filled.body,
             isTemplate: false,
-            lockedSpans: template.lockedSpans
+            lockedSpans: filled.lockedSpans,
+            folder: template.folder,
+            tags: template.tags
         )
         note.updatedAt = Date()
         do {
@@ -126,7 +196,14 @@ final class NotesViewModel: ObservableObject {
             selectedNoteID = note.id
             syncDraftFromSelection()
             isDirty = false
-            saveStatus = "From template"
+            var status = "From template"
+            if filled.filledCount > 0 {
+                status += " · filled \(filled.filledCount)"
+            }
+            if filled.skippedInLocks > 0 {
+                status += " · \(filled.skippedInLocks) in locks skipped"
+            }
+            saveStatus = status
             scheduleSpellCheck(autoPopup: false)
             return true
         } catch {
@@ -337,20 +414,110 @@ final class NotesViewModel: ObservableObject {
         scheduleSpellCheck(autoPopup: true, delay: 0.05)
     }
 
-    func lockSelection() {
+    func lockSelection(label: String? = nil) {
         guard selectedRange.length > 0 else {
             saveStatus = "Select text to lock"
             return
         }
-        draftLockedSpans = LockedSpanMath.add(draftLockedSpans, range: selectedRange)
+        draftLockedSpans = LockedSpanMath.add(draftLockedSpans, range: selectedRange, label: label)
         markDirty()
-        saveStatus = "Locked selection"
+        saveStatus = label.map { "Locked “\($0)”" } ?? "Locked selection"
     }
 
     func unlockSelection() {
         draftLockedSpans = LockedSpanMath.remove(draftLockedSpans, intersecting: selectedRange)
         markDirty()
         saveStatus = "Unlocked"
+    }
+
+    func renameRegion(at index: Int, label: String?) {
+        draftLockedSpans = LockedSpanMath.rename(draftLockedSpans, at: index, label: label)
+        markDirty()
+        saveStatus = "Region updated"
+    }
+
+    func jumpToRegion(at index: Int) {
+        guard draftLockedSpans.indices.contains(index) else { return }
+        selectedRange = draftLockedSpans[index].utf16Range
+    }
+
+    func setFolder(_ value: String) {
+        let n = NoteTagging.normalizeFolder(value) ?? ""
+        let display = n
+        guard draftFolder != display else { return }
+        draftFolder = display
+        markDirty()
+    }
+
+    func setTagsText(_ value: String) {
+        guard draftTagsText != value else { return }
+        draftTagsText = value
+        markDirty()
+    }
+
+    func toggleTagFilter(_ tag: String) {
+        if selectedTagFilters.contains(tag) {
+            selectedTagFilters.remove(tag)
+        } else {
+            selectedTagFilters.insert(tag)
+        }
+    }
+
+    func clearTagFilters() {
+        selectedTagFilters.removeAll()
+    }
+
+    // MARK: - Export / Import
+
+    func exportTemplatesJSON(ids: Set<UUID>? = nil) throws -> Data {
+        let list = notes.filter { $0.isTemplate && (ids == nil || ids!.contains($0.id)) }
+        let pack = TemplatePack.pack(from: list)
+        return try TemplatePack.encodeJSON(pack)
+    }
+
+    func exportTemplatesMarkdown(ids: Set<UUID>? = nil) -> [(fileName: String, contents: String)] {
+        let list = notes.filter { $0.isTemplate && (ids == nil || ids!.contains($0.id)) }
+        var used = Set<String>()
+        var out: [(String, String)] = []
+        for note in list {
+            var name = TemplatePack.safeFileName(for: note.displayTitle)
+            if used.contains(name) {
+                let base = name.replacingOccurrences(of: ".md", with: "")
+                name = "\(base)-\(note.id.uuidString.prefix(6)).md"
+            }
+            used.insert(name)
+            let item = TemplatePackItem(note: note)
+            out.append((name, TemplatePack.exportMarkdown(item)))
+        }
+        return out
+    }
+
+    func importTemplatePackJSON(_ data: Data) throws -> Int {
+        let pack = try TemplatePack.decodeJSON(data)
+        var count = 0
+        for item in pack.templates {
+            var note = item.asNewTemplateNote()
+            if !note.tags.contains(where: { $0.lowercased() == "imported" }) {
+                note.tags = NoteTagging.normalizeTags(note.tags + ["imported"])
+            }
+            try store.save(note)
+            notes.insert(note, at: 0)
+            count += 1
+        }
+        saveStatus = "Imported \(count) template(s)"
+        return count
+    }
+
+    func importTemplateMarkdown(_ text: String) throws -> Int {
+        var item = try TemplatePack.parseMarkdown(text)
+        if !item.tags.contains(where: { $0.lowercased() == "imported" }) {
+            item.tags = NoteTagging.normalizeTags(item.tags + ["imported"])
+        }
+        let note = item.asNewTemplateNote()
+        try store.save(note)
+        notes.insert(note, at: 0)
+        saveStatus = "Imported markdown template"
+        return 1
     }
 
     func save() { persistDraftNow() }
@@ -412,11 +579,22 @@ final class NotesViewModel: ObservableObject {
 
     private func filterList(_ list: [Note]) -> [Note] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = list.sorted { $0.updatedAt > $1.updatedAt }
+        var base = list.sorted { $0.updatedAt > $1.updatedAt }
+        if let folder = selectedFolderFilter {
+            base = base.filter { $0.folder == folder }
+        }
+        if !selectedTagFilters.isEmpty {
+            base = base.filter { note in
+                let noteTags = Set(note.tags.map { $0.lowercased() })
+                return selectedTagFilters.allSatisfy { noteTags.contains($0.lowercased()) }
+            }
+        }
         guard !q.isEmpty else { return base }
         return base.filter {
             $0.displayTitle.localizedCaseInsensitiveContains(q)
                 || $0.body.localizedCaseInsensitiveContains(q)
+                || ($0.folder?.localizedCaseInsensitiveContains(q) ?? false)
+                || $0.tags.contains(where: { $0.localizedCaseInsensitiveContains(q) })
         }
     }
 
@@ -433,12 +611,16 @@ final class NotesViewModel: ObservableObject {
             draftBody = note.body
             draftLockedSpans = note.lockedSpans
             draftIsTemplate = note.isTemplate
+            draftFolder = note.folder ?? ""
+            draftTagsText = NoteTagging.tagsDisplayString(note.tags)
             selectedRange = NSRange(location: (note.body as NSString).length, length: 0)
         } else {
             draftTitle = ""
             draftBody = ""
             draftLockedSpans = []
             draftIsTemplate = false
+            draftFolder = ""
+            draftTagsText = ""
             selectedRange = NSRange(location: 0, length: 0)
         }
         misspellings = []
@@ -454,6 +636,8 @@ final class NotesViewModel: ObservableObject {
         note.body = draftBody
         note.isTemplate = draftIsTemplate
         note.lockedSpans = LockedSpanMath.clamp(draftLockedSpans, toTextLength: (draftBody as NSString).length)
+        note.folder = NoteTagging.normalizeFolder(draftFolder)
+        note.tags = NoteTagging.parseTagString(draftTagsText)
         note.updatedAt = Date()
         do {
             try store.save(note)

@@ -14,6 +14,12 @@ struct NotesRootView: View {
     @State private var pendingNewAsTemplate = false
     @State private var pendingTemplateID: UUID?
     @State private var showDirtyFromTemplateAlert = false
+    @State private var showLockLabelSheet = false
+    @State private var exportJSONData: Data?
+    @State private var showExportJSON = false
+    @State private var exportMarkdownFiles: [(String, String)] = []
+    @State private var showExportMarkdown = false
+    @State private var showImporter = false
 
     private var tokens: NotesThemeTokens {
         appearance.tokens(colorScheme: colorScheme)
@@ -93,6 +99,158 @@ struct NotesRootView: View {
         } message: {
             Text("Save the current note before creating one from a template?")
         }
+        .sheet(item: $viewModel.pendingVariableForm) { form in
+            TemplateVariablesSheet(
+                keys: form.keys,
+                initial: form.values,
+                onSubmit: { values in
+                    viewModel.submitVariableForm(values: values)
+                },
+                onCancel: { viewModel.cancelVariableForm() }
+            )
+            .environment(\.notesTokens, tokens)
+        }
+        .sheet(isPresented: $showLockLabelSheet) {
+            LockLabelSheet { label in
+                viewModel.lockSelection(label: label)
+            }
+            .environment(\.notesTokens, tokens)
+        }
+        .fileExporter(
+            isPresented: $showExportJSON,
+            document: JSONFileDocument(data: exportJSONData ?? Data()),
+            contentType: .json,
+            defaultFilename: "bispell-templates"
+        ) { _ in }
+        .fileImporter(
+            isPresented: $showImporter,
+            allowedContentTypes: [.json, .plainText, .text],
+            allowsMultipleSelection: true
+        ) { result in
+            handleImport(result)
+        }
+    }
+
+    private var filterChips: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !viewModel.allFolders.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        chip("all folders", selected: viewModel.selectedFolderFilter == nil) {
+                            viewModel.selectedFolderFilter = nil
+                        }
+                        ForEach(viewModel.allFolders, id: \.self) { folder in
+                            chip(folder, selected: viewModel.selectedFolderFilter == folder) {
+                                viewModel.selectedFolderFilter =
+                                    viewModel.selectedFolderFilter == folder ? nil : folder
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
+            if !viewModel.allTags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        if !viewModel.selectedTagFilters.isEmpty {
+                            chip("clear tags", selected: false) {
+                                viewModel.clearTagFilters()
+                            }
+                        }
+                        ForEach(viewModel.allTags, id: \.self) { tag in
+                            chip(tag, selected: viewModel.selectedTagFilters.contains(tag)) {
+                                viewModel.toggleTagFilter(tag)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+        .background(Color(nsColor: tokens.sidebar))
+    }
+
+    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(nsColor: selected ? tokens.accentBright : tokens.textSecondary))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: selected ? tokens.accentDim : tokens.elevated))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3)
+                        .strokeBorder(Color(nsColor: tokens.borderSubtle), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func exportJSON() {
+        do {
+            exportJSONData = try viewModel.exportTemplatesJSON()
+            showExportJSON = true
+        } catch {
+            viewModel.saveStatus = "Export failed"
+        }
+    }
+
+    private func exportMarkdown() {
+        let files = viewModel.exportTemplatesMarkdown()
+        guard !files.isEmpty else {
+            viewModel.saveStatus = "No templates to export"
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.begin { resp in
+            guard resp == .OK, let dir = panel.url else { return }
+            do {
+                for (name, contents) in files {
+                    let url = dir.appendingPathComponent(name)
+                    try contents.write(to: url, atomically: true, encoding: .utf8)
+                }
+                DispatchQueue.main.async {
+                    viewModel.saveStatus = "Exported \(files.count) markdown file(s)"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    viewModel.saveStatus = "Markdown export failed"
+                }
+            }
+        }
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure:
+            viewModel.saveStatus = "Import cancelled"
+        case .success(let urls):
+            var count = 0
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let data = try Data(contentsOf: url)
+                    if url.pathExtension.lowercased() == "json" {
+                        count += try viewModel.importTemplatePackJSON(data)
+                    } else if let text = String(data: data, encoding: .utf8) {
+                        count += try viewModel.importTemplateMarkdown(text)
+                    }
+                } catch {
+                    viewModel.saveStatus = "Import failed: \(error.localizedDescription)"
+                    return
+                }
+            }
+            if count > 0 {
+                viewModel.saveStatus = "Imported \(count) template(s)"
+            }
+        }
     }
 
     private var sidebar: some View {
@@ -157,6 +315,8 @@ struct NotesRootView: View {
             .background(Color(nsColor: tokens.sidebar))
             .searchable(text: $viewModel.searchText, prompt: "search…")
 
+            filterChips
+
             if viewModel.regularNotes.isEmpty && viewModel.templateNotes.isEmpty {
                 Text("// empty — create a note")
                     .font(.system(size: 11, design: .monospaced))
@@ -200,19 +360,48 @@ struct NotesRootView: View {
                     onNewNote: attemptNewNote,
                     onNewTemplate: attemptNewTemplate,
                     onFromTemplate: attemptNewFromTemplate,
-                    onDelete: { confirmDelete = true }
+                    onDelete: { confirmDelete = true },
+                    onLock: { showLockLabelSheet = true },
+                    onExportJSON: exportJSON,
+                    onExportMarkdown: exportMarkdown,
+                    onImport: { showImporter = true }
                 )
 
-                // Title row
-                HStack(spacing: 10) {
-                    Text("›")
-                        .font(.system(size: 18, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(nsColor: tokens.accent))
-                    TextField("untitled", text: viewModel.titleBinding)
+                // Title + metadata
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Text("›")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: tokens.accent))
+                        TextField("untitled", text: viewModel.titleBinding)
+                            .textFieldStyle(.plain)
+                            .font(Font(appearance.titleFont()))
+                            .foregroundStyle(Color(nsColor: tokens.textPrimary))
+                        Spacer()
+                    }
+                    HStack(spacing: 10) {
+                        Text("folder")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                        TextField("optional", text: Binding(
+                            get: { viewModel.draftFolder },
+                            set: { viewModel.setFolder($0) }
+                        ))
                         .textFieldStyle(.plain)
-                        .font(Font(appearance.titleFont()))
-                        .foregroundStyle(Color(nsColor: tokens.textPrimary))
-                    Spacer()
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                        .frame(maxWidth: 140)
+                        Text("tags")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                        TextField("a, b, c", text: Binding(
+                            get: { viewModel.draftTagsText },
+                            set: { viewModel.setTagsText($0) }
+                        ))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
