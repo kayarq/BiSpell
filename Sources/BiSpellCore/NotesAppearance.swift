@@ -3,68 +3,125 @@ import Foundation
 import AppKit
 #endif
 
-/// Notes UI themes: classic trio + fancy set (Rose Quartz, Sakura Dusk, Parchment Luxe).
+// MARK: - Themes
+
+/// Terminal-like curated themes (dark-first).
 public enum NotesTheme: String, Codable, CaseIterable, Sendable, Identifiable {
-    case system
-    case paper
-    case nightInk
-    case roseQuartz
-    case sakuraDusk
-    case parchmentLuxe
+    case phosphor
+    case amber
+    case cyan
+    case paperMono
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
-        case .system: return "System"
-        case .paper: return "Paper"
-        case .nightInk: return "Night Ink"
-        case .roseQuartz: return "Rose Quartz"
-        case .sakuraDusk: return "Sakura Dusk"
-        case .parchmentLuxe: return "Parchment Luxe"
+        case .phosphor: return "Phosphor"
+        case .amber: return "Amber"
+        case .cyan: return "Cyan"
+        case .paperMono: return "Paper Mono"
+        }
+    }
+
+    /// Migrate legacy theme IDs from earlier builds.
+    public static func migrated(fromRaw raw: String?) -> NotesTheme {
+        guard let raw else { return .phosphor }
+        if let direct = NotesTheme(rawValue: raw) { return direct }
+        switch raw {
+        case "system", "nightInk", "sakuraDusk": return .phosphor
+        case "paper", "parchmentLuxe": return .paperMono
+        case "roseQuartz": return .amber
+        default: return .phosphor
         }
     }
 }
 
-/// Writing font — System, Avenir Next, Palatino (fancy).
+// MARK: - Fonts
+
+/// Writing fonts — mono-first with proportional escape hatch.
 public enum NotesFontOption: String, Codable, CaseIterable, Sendable, Identifiable {
-    case system
+    case sfMono
+    case menlo
     case avenirNext
-    case palatino
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
-        case .system: return "System"
+        case .sfMono: return "SF Mono"
+        case .menlo: return "Menlo"
         case .avenirNext: return "Avenir Next"
-        case .palatino: return "Palatino"
         }
     }
 
-    /// PostScript / family names tried in order.
     public var fontNames: [String] {
         switch self {
-        case .system: return []
+        case .sfMono: return ["SFMono-Regular", "SF Mono", "Menlo-Regular", "Menlo"]
+        case .menlo: return ["Menlo-Regular", "Menlo", "SFMono-Regular"]
         case .avenirNext: return ["Avenir Next", "AvenirNext-Regular"]
-        case .palatino: return ["Palatino", "Palatino-Roman", "Palatino Linotype"]
+        }
+    }
+
+    public static func migrated(fromRaw raw: String?) -> NotesFontOption {
+        guard let raw else { return .sfMono }
+        if let direct = NotesFontOption(rawValue: raw) { return direct }
+        switch raw {
+        case "system", "palatino": return .sfMono
+        case "avenirNext": return .avenirNext
+        default: return .sfMono
         }
     }
 }
+
+// MARK: - Tokens
+
+/// Semantic colors + radii for terminal UI (AppKit + SwiftUI consumers).
+public struct NotesThemeTokens: Sendable {
+    public var window: NSColor
+    public var sidebar: NSColor
+    public var editor: NSColor
+    public var elevated: NSColor
+    public var chromeBar: NSColor
+
+    public var textPrimary: NSColor
+    public var textSecondary: NSColor
+    public var textTertiary: NSColor
+
+    public var accent: NSColor
+    public var accentDim: NSColor
+    public var accentBright: NSColor
+
+    public var borderSubtle: NSColor
+    public var borderStrong: NSColor
+
+    public var lockFill: NSColor
+    public var templateBadge: NSColor
+    public var dirty: NSColor
+    public var danger: NSColor
+
+    public var prompt: NSColor
+    public var selection: NSColor
+    public var caret: NSColor
+
+    public var chipRadius: CGFloat
+    public var cardRadius: CGFloat
+    public var rowRadius: CGFloat
+}
+
+// MARK: - Settings
 
 public struct NotesAppearanceSettings: Codable, Equatable, Sendable {
     public var theme: NotesTheme
     public var font: NotesFontOption
-    /// Point size for the body editor (title scales slightly larger in UI).
     public var fontSize: Double
 
     public static let `default` = NotesAppearanceSettings(
-        theme: .system,
-        font: .system,
-        fontSize: 15
+        theme: .phosphor,
+        font: .sfMono,
+        fontSize: 14
     )
 
-    public init(theme: NotesTheme, font: NotesFontOption, fontSize: Double = 15) {
+    public init(theme: NotesTheme, font: NotesFontOption, fontSize: Double = 14) {
         self.theme = theme
         self.font = font
         self.fontSize = fontSize
@@ -72,9 +129,28 @@ public struct NotesAppearanceSettings: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        theme = try c.decodeIfPresent(NotesTheme.self, forKey: .theme) ?? .system
-        font = try c.decodeIfPresent(NotesFontOption.self, forKey: .font) ?? .system
-        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 15
+        if let themeRaw = try? c.decode(String.self, forKey: .theme) {
+            theme = NotesTheme.migrated(fromRaw: themeRaw)
+        } else {
+            theme = .phosphor
+        }
+        if let fontRaw = try? c.decode(String.self, forKey: .font) {
+            font = NotesFontOption.migrated(fromRaw: fontRaw)
+        } else {
+            font = .sfMono
+        }
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 14
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case theme, font, fontSize
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(theme.rawValue, forKey: .theme)
+        try c.encode(font.rawValue, forKey: .font)
+        try c.encode(fontSize, forKey: .fontSize)
     }
 }
 
@@ -101,8 +177,11 @@ public final class NotesAppearanceStore: @unchecked Sendable {
     }
 }
 
+// MARK: - Theme factories
+
 #if canImport(AppKit)
 public extension NotesTheme {
+    /// Legacy shim used by older call sites.
     struct Colors: Sendable {
         public var editorBackground: NSColor
         public var editorText: NSColor
@@ -111,82 +190,159 @@ public extension NotesTheme {
         public var secondaryText: NSColor
     }
 
-    /// Resolve colors for the current appearance (light/dark for `.system`).
     func colors(effectiveDark: Bool) -> Colors {
+        let t = tokens()
+        return Colors(
+            editorBackground: t.editor,
+            editorText: t.textPrimary,
+            sidebarBackground: t.sidebar,
+            chromeBackground: t.chromeBar,
+            secondaryText: t.textSecondary
+        )
+    }
+
+    func tokens() -> NotesThemeTokens {
         switch self {
-        case .system:
-            return Colors(
-                editorBackground: .textBackgroundColor,
-                editorText: .textColor,
-                sidebarBackground: .windowBackgroundColor,
-                chromeBackground: .windowBackgroundColor,
-                secondaryText: .secondaryLabelColor
+        case .phosphor:
+            return .make(
+                window: hex(0x0B0F0C),
+                sidebar: hex(0x080B09),
+                editor: hex(0x0E1410),
+                elevated: hex(0x141C16),
+                chrome: hex(0x101612),
+                text: hex(0xB6F5C8),
+                text2: hex(0x6FA88A),
+                text3: hex(0x3D5C4A),
+                accent: hex(0x3DDC84),
+                accentDim: hex(0x1A3D2A),
+                accentBright: hex(0x6EF5A8),
+                lockAlpha: 0.14,
+                dirty: hex(0xE8B86D),
+                danger: hex(0xE85D5D)
             )
-        case .paper:
-            // Warm cream paper + dark ink (readable in both OS modes).
-            return Colors(
-                editorBackground: NSColor(calibratedRed: 0.98, green: 0.96, blue: 0.90, alpha: 1),
-                editorText: NSColor(calibratedRed: 0.18, green: 0.14, blue: 0.10, alpha: 1),
-                sidebarBackground: NSColor(calibratedRed: 0.94, green: 0.91, blue: 0.84, alpha: 1),
-                chromeBackground: NSColor(calibratedRed: 0.96, green: 0.93, blue: 0.87, alpha: 1),
-                secondaryText: NSColor(calibratedRed: 0.40, green: 0.34, blue: 0.28, alpha: 1)
+        case .amber:
+            return .make(
+                window: hex(0x120E08),
+                sidebar: hex(0x0E0B06),
+                editor: hex(0x161008),
+                elevated: hex(0x1E160C),
+                chrome: hex(0x18120A),
+                text: hex(0xFFD29A),
+                text2: hex(0xC49A5C),
+                text3: hex(0x6B5230),
+                accent: hex(0xFFB000),
+                accentDim: hex(0x3D2A10),
+                accentBright: hex(0xFFC94D),
+                lockAlpha: 0.14,
+                dirty: hex(0xFFB000),
+                danger: hex(0xE85D5D)
             )
-        case .nightInk:
-            return Colors(
-                editorBackground: NSColor(calibratedRed: 0.11, green: 0.12, blue: 0.14, alpha: 1),
-                editorText: NSColor(calibratedRed: 0.88, green: 0.89, blue: 0.91, alpha: 1),
-                sidebarBackground: NSColor(calibratedRed: 0.09, green: 0.10, blue: 0.11, alpha: 1),
-                chromeBackground: NSColor(calibratedRed: 0.13, green: 0.14, blue: 0.16, alpha: 1),
-                secondaryText: NSColor(calibratedRed: 0.62, green: 0.64, blue: 0.68, alpha: 1)
+        case .cyan:
+            return .make(
+                window: hex(0x0A0E14),
+                sidebar: hex(0x070A10),
+                editor: hex(0x0C121A),
+                elevated: hex(0x121A24),
+                chrome: hex(0x0E141C),
+                text: hex(0xC8E7F5),
+                text2: hex(0x6A9BB0),
+                text3: hex(0x3A5A6A),
+                accent: hex(0x5FD0FF),
+                accentDim: hex(0x163040),
+                accentBright: hex(0x8ADFFF),
+                lockAlpha: 0.14,
+                dirty: hex(0xE8B86D),
+                danger: hex(0xE85D5D)
             )
-        case .roseQuartz:
-            // Soft blush field + deep plum ink.
-            return Colors(
-                editorBackground: NSColor(calibratedRed: 0.97, green: 0.92, blue: 0.93, alpha: 1),
-                editorText: NSColor(calibratedRed: 0.28, green: 0.14, blue: 0.22, alpha: 1),
-                sidebarBackground: NSColor(calibratedRed: 0.92, green: 0.84, blue: 0.87, alpha: 1),
-                chromeBackground: NSColor(calibratedRed: 0.95, green: 0.88, blue: 0.90, alpha: 1),
-                secondaryText: NSColor(calibratedRed: 0.52, green: 0.36, blue: 0.42, alpha: 1)
-            )
-        case .sakuraDusk:
-            // Atmospheric lavender-dark with pale rose text.
-            return Colors(
-                editorBackground: NSColor(calibratedRed: 0.14, green: 0.11, blue: 0.16, alpha: 1),
-                editorText: NSColor(calibratedRed: 0.94, green: 0.86, blue: 0.90, alpha: 1),
-                sidebarBackground: NSColor(calibratedRed: 0.11, green: 0.09, blue: 0.14, alpha: 1),
-                chromeBackground: NSColor(calibratedRed: 0.17, green: 0.13, blue: 0.20, alpha: 1),
-                secondaryText: NSColor(calibratedRed: 0.72, green: 0.60, blue: 0.70, alpha: 1)
-            )
-        case .parchmentLuxe:
-            // Aged parchment + sepia ink (richer than Paper).
-            return Colors(
-                editorBackground: NSColor(calibratedRed: 0.95, green: 0.90, blue: 0.78, alpha: 1),
-                editorText: NSColor(calibratedRed: 0.27, green: 0.18, blue: 0.10, alpha: 1),
-                sidebarBackground: NSColor(calibratedRed: 0.88, green: 0.80, blue: 0.64, alpha: 1),
-                chromeBackground: NSColor(calibratedRed: 0.91, green: 0.84, blue: 0.70, alpha: 1),
-                secondaryText: NSColor(calibratedRed: 0.48, green: 0.36, blue: 0.22, alpha: 1)
+        case .paperMono:
+            return .make(
+                window: hex(0xEDEBE3),
+                sidebar: hex(0xE4E1D7),
+                editor: hex(0xF2F0E9),
+                elevated: hex(0xFFFFFF),
+                chrome: hex(0xE8E5DB),
+                text: hex(0x1A1A18),
+                text2: hex(0x5C5A52),
+                text3: hex(0x8A877C),
+                accent: hex(0x0B6E4F),
+                accentDim: hex(0xC5D9CF),
+                accentBright: hex(0x0E8A63),
+                lockAlpha: 0.12,
+                dirty: hex(0xB8860B),
+                danger: hex(0xC23B3B),
+                isLight: true
             )
         }
     }
 }
 
+private extension NotesThemeTokens {
+    static func make(
+        window: NSColor,
+        sidebar: NSColor,
+        editor: NSColor,
+        elevated: NSColor,
+        chrome: NSColor,
+        text: NSColor,
+        text2: NSColor,
+        text3: NSColor,
+        accent: NSColor,
+        accentDim: NSColor,
+        accentBright: NSColor,
+        lockAlpha: CGFloat,
+        dirty: NSColor,
+        danger: NSColor,
+        isLight: Bool = false
+    ) -> NotesThemeTokens {
+        let borderSubtle = isLight
+            ? NSColor(calibratedWhite: 0, alpha: 0.10)
+            : NSColor(calibratedWhite: 1, alpha: 0.08)
+        let borderStrong = isLight
+            ? NSColor(calibratedWhite: 0, alpha: 0.18)
+            : NSColor(calibratedWhite: 1, alpha: 0.16)
+        return NotesThemeTokens(
+            window: window,
+            sidebar: sidebar,
+            editor: editor,
+            elevated: elevated,
+            chromeBar: chrome,
+            textPrimary: text,
+            textSecondary: text2,
+            textTertiary: text3,
+            accent: accent,
+            accentDim: accentDim,
+            accentBright: accentBright,
+            borderSubtle: borderSubtle,
+            borderStrong: borderStrong,
+            lockFill: accent.withAlphaComponent(lockAlpha),
+            templateBadge: accentDim,
+            dirty: dirty,
+            danger: danger,
+            prompt: accent,
+            selection: accent.withAlphaComponent(isLight ? 0.20 : 0.28),
+            caret: accentBright,
+            chipRadius: 5,
+            cardRadius: 6,
+            rowRadius: 4
+        )
+    }
+}
+
+private func hex(_ value: UInt32, alpha: CGFloat = 1) -> NSColor {
+    let r = CGFloat((value >> 16) & 0xFF) / 255
+    let g = CGFloat((value >> 8) & 0xFF) / 255
+    let b = CGFloat(value & 0xFF) / 255
+    return NSColor(calibratedRed: r, green: g, blue: b, alpha: alpha)
+}
+
 public extension NotesFontOption {
     func nsFont(size: CGFloat) -> NSFont {
-        switch self {
-        case .system:
-            return NSFont.systemFont(ofSize: size)
-        case .avenirNext, .palatino:
-            for name in fontNames {
-                if let font = NSFont(name: name, size: size) {
-                    return font
-                }
+        for name in fontNames {
+            if let font = NSFont(name: name, size: size) {
+                return font
             }
-            // Fallback chain
-            if self == .palatino, let georgia = NSFont(name: "Georgia", size: size) {
-                return georgia
-            }
-            return NSFont.systemFont(ofSize: size)
         }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }
 #endif

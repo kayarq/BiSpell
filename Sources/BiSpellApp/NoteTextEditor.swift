@@ -14,6 +14,8 @@ struct NoteTextEditor: NSViewRepresentable {
     var textColor: NSColor = .textColor
     var backgroundColor: NSColor = .textBackgroundColor
     var lockedBackgroundColor: NSColor = NSColor.systemYellow.withAlphaComponent(0.22)
+    var accentColor: NSColor = .controlAccentColor
+    var borderColor: NSColor = NSColor.separatorColor
     var isEditable: Bool = true
     var onEditingChanged: (() -> Void)?
     /// Fired after the user types a word boundary (space / punctuation / newline).
@@ -460,6 +462,13 @@ struct NoteTextEditor: NSViewRepresentable {
                     self?.parent.onDismissSuggestions?()
                 }
             }
+            popup?.applyTheme(
+                background: parent.backgroundColor,
+                elevated: parent.backgroundColor,
+                text: parent.textColor,
+                accent: parent.accentColor,
+                border: parent.borderColor
+            )
             popup?.update(misspelling: miss)
             let anchor = caretRectInScreen(textView: textView, utf16Range: miss.utf16Range)
                 ?? caretRectInScreen(textView: textView, utf16Range: textView.selectedRange())
@@ -597,8 +606,8 @@ final class NotesSuggestionPanel: NSPanel {
         box.layer?.borderWidth = 1
         box.layer?.borderColor = NSColor.separatorColor.cgColor
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        hintLabel.font = .systemFont(ofSize: 10)
+        titleLabel.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        hintLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         hintLabel.textColor = .secondaryLabelColor
 
         stack.orientation = .vertical
@@ -618,6 +627,29 @@ final class NotesSuggestionPanel: NSPanel {
             box.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
             box.widthAnchor.constraint(lessThanOrEqualToConstant: 420)
         ])
+    }
+
+    private var themeBackground = NSColor.windowBackgroundColor
+    private var themeElevated = NSColor.controlBackgroundColor
+    private var themeText = NSColor.labelColor
+    private var themeAccent = NSColor.controlAccentColor
+    private var themeBorder = NSColor.separatorColor
+
+    func applyTheme(background: NSColor, elevated: NSColor, text: NSColor, accent: NSColor, border: NSColor) {
+        themeBackground = background
+        themeElevated = elevated
+        themeText = text
+        themeAccent = accent
+        themeBorder = border
+        if let box = contentView {
+            box.wantsLayer = true
+            box.layer?.backgroundColor = elevated.withAlphaComponent(0.97).cgColor
+            box.layer?.borderColor = border.cgColor
+            box.layer?.borderWidth = 1
+            box.layer?.cornerRadius = 6
+        }
+        titleLabel.textColor = text
+        hintLabel.textColor = text.withAlphaComponent(0.65)
     }
 
     func update(misspelling: Misspelling) {
@@ -645,9 +677,10 @@ final class NotesSuggestionPanel: NSPanel {
             if index == 0 {
                 button.keyEquivalent = "1"
                 button.keyEquivalentModifierMask = .command
+                button.contentTintColor = themeAccent
             }
             button.identifier = NSUserInterfaceItemIdentifier(suggestion)
-            button.font = .systemFont(ofSize: 12)
+            button.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
             row.addArrangedSubview(button)
         }
         stack.addArrangedSubview(row)

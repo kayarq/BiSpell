@@ -88,3 +88,15 @@ Each entry is `{ wrong, correct, count, firstCorrectedAt, lastCorrectedAt }`. Co
 - **New → New Template**, or **Move to Templates** on a note.
 - **New Note from Template** (context menu / menu) copies body + locked spans into a new editable note.
 
+## Notes appearance (terminal UI)
+
+Themes (command strip → Theme):
+- **Phosphor** (default) — green CRT
+- **Amber** — vintage amber terminal
+- **Cyan** — ice / modern CLI
+- **Paper Mono** — light day terminal
+
+Writing fonts: **SF Mono** (default), **Menlo**, **Avenir Next**.
+
+Chrome uses a custom command-strip (chips), not stock toolbar buttons.
+

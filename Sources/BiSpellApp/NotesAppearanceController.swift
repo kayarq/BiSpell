@@ -27,13 +27,15 @@ final class NotesAppearanceController: ObservableObject {
 
     var fontSize: Double {
         get { settings.fontSize }
-        set { settings.fontSize = min(28, max(12, newValue)) }
+        set { settings.fontSize = min(28, max(11, newValue)) }
+    }
+
+    func tokens(colorScheme: ColorScheme = .dark) -> NotesThemeTokens {
+        settings.theme.tokens()
     }
 
     func colors(colorScheme: ColorScheme) -> NotesTheme.Colors {
-        let dark = colorScheme == .dark
-        // Paper/Night Ink ignore OS scheme for their fixed palettes.
-        return settings.theme.colors(effectiveDark: dark)
+        settings.theme.colors(effectiveDark: colorScheme == .dark)
     }
 
     func bodyFont() -> NSFont {
@@ -41,6 +43,6 @@ final class NotesAppearanceController: ObservableObject {
     }
 
     func titleFont() -> NSFont {
-        settings.font.nsFont(size: CGFloat(settings.fontSize + 4))
+        settings.font.nsFont(size: CGFloat(settings.fontSize + 3))
     }
 }
