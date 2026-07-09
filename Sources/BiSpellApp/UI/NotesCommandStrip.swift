@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import BiSpellCore
 
 struct NotesToolbarDivider: View {
@@ -166,6 +167,7 @@ struct NotesCommandStrip: View {
 
     private var createMenu: some View {
         Menu {
+            Button("Open Today (⌘T)") { viewModel.openToday() }
             Button("New Template") { onNewTemplate() }
             Divider()
             if viewModel.templateNotes.isEmpty {
@@ -180,7 +182,7 @@ struct NotesCommandStrip: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Template / from template")
+        .help("Today / template / from template")
     }
 
     private var locksMenu: some View {
@@ -339,12 +341,45 @@ struct NotesCommandStrip: View {
             } else if viewModel.selectedNoteID != nil {
                 Button("Move to Templates") { viewModel.saveCurrentAsTemplate() }
             }
+            Button("Reveal in Finder") { viewModel.revealSelectedInFinder() }
+                .disabled(viewModel.selectedNoteID == nil)
+            Button("Quick Switcher… (⌘P)") { viewModel.openQuickSwitcher() }
+            Divider()
+            Section("Sort") {
+                ForEach(NoteSortMode.allCases) { mode in
+                    Button {
+                        viewModel.sortMode = mode
+                    } label: {
+                        HStack {
+                            Text(mode.label)
+                            if viewModel.sortMode == mode { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
             Divider()
             Button("Export templates as JSON…") { onExportJSON() }
             Button("Export templates as Markdown…") { onExportMarkdown() }
-            Button("Import…") { onImport() }
+            Button("Import files…") { onImport() }
+            Button("Import Markdown folder…") {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.prompt = "Import Folder"
+                panel.message = "Import all .md files into the library (default: archive)"
+                panel.begin { resp in
+                    guard resp == .OK, let url = panel.url else { return }
+                    DispatchQueue.main.async {
+                        _ = viewModel.importMarkdownDirectory(url, destFolder: LibraryPaths.archive)
+                    }
+                }
+            }
+            Button("Backup Library…") { _ = viewModel.backupLibrary() }
+            if viewModel.trashCount > 0 {
+                Button("Empty Trash (\(viewModel.trashCount))") { viewModel.emptyTrash() }
+            }
             Divider()
-            Button("Delete", role: .destructive, action: onDelete)
+            Button("Move to Trash", role: .destructive, action: onDelete)
                 .disabled(viewModel.selectedNoteID == nil)
         } label: {
             chipLabel(systemName: "ellipsis", title: "More")

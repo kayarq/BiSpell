@@ -8,7 +8,7 @@ public struct Note: Identifiable, Equatable, Codable, Sendable {
     public var updatedAt: Date
     public var isTemplate: Bool
     public var lockedSpans: [LockedSpan]
-    /// Optional flat folder name (no nesting in v1).
+    /// Relative path under library root (e.g. `inbox`, `work/projects`, `daily`).
     public var folder: String?
     /// Multi-tags; stored trimmed, unique by case-insensitive key.
     public var tags: [String]
@@ -56,7 +56,11 @@ public struct Note: Identifiable, Equatable, Codable, Sendable {
         if let line = body.split(whereSeparator: \.isNewline)
             .map({ $0.trimmingCharacters(in: .whitespaces) })
             .first(where: { !$0.isEmpty }) {
-            return String(line.prefix(80))
+            // Skip pure front-matter markers
+            let s = String(line)
+            if s != "---" {
+                return String(s.prefix(80))
+            }
         }
         return trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
     }
@@ -71,18 +75,18 @@ public struct Note: Identifiable, Equatable, Codable, Sendable {
 }
 
 public enum NoteTagging {
+    /// Normalize relative folder path. Empty → nil (callers map to inbox when persisting).
+    /// Nested paths allowed: `work/ideas`. Max depth 6, segment ≤ 64.
     public static func normalizeFolder(_ folder: String?) -> String? {
         guard let folder else { return nil }
         let t = folder.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return nil }
-        // Flat names only
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " _-"))
-        let filtered = String(t.unicodeScalars.filter { allowed.contains($0) })
-        let collapsed = filtered
-            .split(whereSeparator: { $0 == "/" || $0 == "\\" })
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return collapsed.isEmpty ? nil : String(collapsed.prefix(64))
+        // Use library path rules; empty/unsafe → treat as nil so UI "clear" works,
+        // while store maps nil → inbox on save.
+        let normalized = LibraryPaths.normalizeFolder(t)
+        // If user cleared intentionally, normalizeFolder returns inbox — distinguish:
+        // only when input was non-empty after trim we return the path.
+        return normalized
     }
 
     public static func normalizeTags(_ tags: [String]) -> [String] {

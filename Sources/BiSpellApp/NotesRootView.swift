@@ -24,6 +24,16 @@ struct NotesRootView: View {
     @State private var regionsMenuPresented = false
     @State private var foldersExpanded = true
     @State private var tagsExpanded = true
+    @State private var showRenameFolder = false
+    @State private var renameFolderFrom: String = ""
+    @State private var renameFolderTo: String = ""
+    @State private var showDeleteFolder = false
+    @State private var deleteFolderName: String = ""
+    @State private var showRenameTag = false
+    @State private var renameTagFrom: String = ""
+    @State private var renameTagTo: String = ""
+    @State private var showDeleteTag = false
+    @State private var deleteTagName: String = ""
 
     private var tokens: NotesThemeTokens {
         appearance.tokens(colorScheme: colorScheme)
@@ -39,15 +49,16 @@ struct NotesRootView: View {
         .toolbarBackground(Color(nsColor: tokens.chromeBar), for: .windowToolbar)
         .environment(\.notesTokens, tokens)
         .background(Color(nsColor: tokens.window))
-        .alert("Delete this note?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) { viewModel.deleteSelected() }
+        .alert("Move note to trash?", isPresented: $confirmDelete) {
+            Button("Move to Trash", role: .destructive) { viewModel.deleteSelected() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This cannot be undone.")
+            Text("The note moves to .bispell/trash/ under your library. Empty trash from Settings or More.")
         }
         .alert("Unsaved changes", isPresented: $showDirtySwitchAlert) {
             Button("Save") {
-                viewModel.save()
+                // Abort navigation if save fails so the dirty draft is not wiped.
+                guard viewModel.flushPendingSave() else { return }
                 if let id = pendingSelection { _ = viewModel.select(id: id, force: true) }
                 pendingSelection = nil
             }
@@ -61,7 +72,7 @@ struct NotesRootView: View {
         }
         .alert("Unsaved changes", isPresented: $showDirtyNewAlert) {
             Button("Save") {
-                viewModel.save()
+                guard viewModel.flushPendingSave() else { return }
                 viewModel.createNote(saveImmediately: true, asTemplate: pendingNewAsTemplate)
                 pendingNewAsTemplate = false
             }
@@ -82,7 +93,7 @@ struct NotesRootView: View {
         }
         .alert("Unsaved changes", isPresented: $showDirtyFromTemplateAlert) {
             Button("Save") {
-                viewModel.save()
+                guard viewModel.flushPendingSave() else { return }
                 if let id = pendingTemplateID {
                     _ = viewModel.createNoteFromTemplate(id, force: true)
                 }
@@ -119,6 +130,48 @@ struct NotesRootView: View {
                 viewModel.lockSelection(label: label)
             }
             .environment(\.notesTokens, tokens)
+        }
+        .sheet(isPresented: $viewModel.showQuickSwitcher) {
+            QuickSwitcherView(viewModel: viewModel)
+                .environment(\.notesTokens, tokens)
+        }
+        .alert("Rename folder", isPresented: $showRenameFolder) {
+            TextField("New path", text: $renameFolderTo)
+            Button("Rename") {
+                viewModel.renameFolder(from: renameFolderFrom, to: renameFolderTo)
+                taxonomy.renameFolderColor(from: renameFolderFrom, to: renameFolderTo)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rename “\(renameFolderFrom)” on disk (and nested notes).")
+        }
+        .alert("Delete folder?", isPresented: $showDeleteFolder) {
+            Button("Move notes to inbox", role: .destructive) {
+                _ = viewModel.deleteFolder(deleteFolderName)
+                taxonomy.removeFolderColor(deleteFolderName)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Notes under “\(deleteFolderName)” move to inbox/. The folder is removed.")
+        }
+        .alert("Rename tag", isPresented: $showRenameTag) {
+            TextField("New tag name", text: $renameTagTo)
+            Button("Rename") {
+                _ = viewModel.renameTag(from: renameTagFrom, to: renameTagTo)
+                taxonomy.renameTagColor(from: renameTagFrom, to: renameTagTo)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rename “\(renameTagFrom)” on every note that uses it.")
+        }
+        .alert("Delete tag?", isPresented: $showDeleteTag) {
+            Button("Remove from all notes", role: .destructive) {
+                _ = viewModel.deleteTag(deleteTagName)
+                taxonomy.removeTagColor(deleteTagName)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Remove “\(deleteTagName)” from all notes. Notes themselves are kept.")
         }
         .fileExporter(
             isPresented: $showExportJSON,
@@ -160,7 +213,20 @@ struct NotesRootView: View {
                                     viewModel.selectedFolderFilter =
                                         viewModel.selectedFolderFilter == folder ? nil : folder
                                 },
-                                onColorPick: { taxonomy.setFolderColor($0, for: folder) }
+                                onColorPick: { taxonomy.setFolderColor($0, for: folder) },
+                                contextMenuExtra: {
+                                    Button("Rename folder…") {
+                                        renameFolderFrom = folder
+                                        renameFolderTo = folder
+                                        showRenameFolder = true
+                                    }
+                                    if folder != "inbox" {
+                                        Button("Delete folder…", role: .destructive) {
+                                            deleteFolderName = folder
+                                            showDeleteFolder = true
+                                        }
+                                    }
+                                }
                             )
                         }
                     }
@@ -199,7 +265,18 @@ struct NotesRootView: View {
                                 palette: taxonomy.tagPalette(tag),
                                 selected: viewModel.selectedTagFilters.contains(tag),
                                 action: { viewModel.toggleTagFilter(tag) },
-                                onColorPick: { taxonomy.setTagColor($0, for: tag) }
+                                onColorPick: { taxonomy.setTagColor($0, for: tag) },
+                                contextMenuExtra: {
+                                    Button("Rename tag…") {
+                                        renameTagFrom = tag
+                                        renameTagTo = tag
+                                        showRenameTag = true
+                                    }
+                                    Button("Delete tag…", role: .destructive) {
+                                        deleteTagName = tag
+                                        showDeleteTag = true
+                                    }
+                                }
                             )
                         }
                     }
@@ -391,6 +468,42 @@ struct NotesRootView: View {
                 filterChips
             }
 
+            // Shortcuts
+            HStack(spacing: 8) {
+                Button {
+                    viewModel.openToday()
+                } label: {
+                    Label("Today", systemImage: "sun.max")
+                        .font(.system(size: 11, design: .monospaced))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(nsColor: tokens.accent))
+                Button {
+                    viewModel.selectedFolderFilter = LibraryPaths.inbox
+                    viewModel.clearTagFilters()
+                } label: {
+                    Label("Inbox", systemImage: "tray")
+                        .font(.system(size: 11, design: .monospaced))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                Spacer()
+                Menu {
+                    ForEach(NoteSortMode.allCases) { mode in
+                        Button(mode.label) { viewModel.sortMode = mode }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 24)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: tokens.sidebar))
+
             List(selection: Binding(
                 get: { viewModel.selectedNoteID },
                 set: { attemptSelect($0) }
@@ -455,105 +568,239 @@ struct NotesRootView: View {
                 attemptNewFromTemplate(note.id)
             }
             Button("Move to Notes") {
+                // Flush first so force-select cannot discard another note's dirty draft.
+                guard viewModel.flushPendingSave() else { return }
                 if viewModel.select(id: note.id, force: true) {
                     viewModel.convertTemplateToNote()
                 }
             }
         } else {
             Button("Move to Templates") {
+                guard viewModel.flushPendingSave() else { return }
                 if viewModel.select(id: note.id, force: true) {
                     viewModel.saveCurrentAsTemplate()
                 }
             }
         }
-        Button("Delete", role: .destructive) { viewModel.delete(id: note.id) }
+        if let folder = note.folder {
+            Button("Filter folder “\(folder)”") {
+                viewModel.selectedFolderFilter = folder
+            }
+            Button("Rename folder…") {
+                renameFolderFrom = folder
+                renameFolderTo = folder
+                showRenameFolder = true
+            }
+            if folder != "inbox" {
+                Button("Delete folder…", role: .destructive) {
+                    deleteFolderName = folder
+                    showDeleteFolder = true
+                }
+            }
+        }
+        if viewModel.isNoteSplit {
+            Button("Open in Right Pane") {
+                viewModel.openInSplit(note.id)
+            }
+        } else {
+            Button("Open in Split") {
+                viewModel.openInSplit(note.id)
+            }
+        }
+        Button("Reveal in Finder") {
+            guard viewModel.flushPendingSave() else { return }
+            if viewModel.select(id: note.id, force: true) {
+                viewModel.revealSelectedInFinder()
+            }
+        }
+        Button("Move to Trash", role: .destructive) { viewModel.delete(id: note.id) }
     }
 
     @ViewBuilder
-    private var editorWorkspace: some View {
-        let source = noteSourceEditor
+    private func editorWorkspace(isSecondary: Bool) -> some View {
+        let mode = isSecondary ? viewModel.secondaryEditorMode : viewModel.editorMode
+        let body = isSecondary ? viewModel.secondaryDraftBody : viewModel.draftBody
+        let source = noteSourceEditor(isSecondary: isSecondary)
         let preview = MarkdownPreviewView(
-            markdown: viewModel.draftBody,
+            markdown: body,
             tokens: tokens,
             pointSize: appearance.bodyFont().pointSize
         )
-        switch viewModel.editorMode {
-        case .source:
-            source
-        case .preview:
-            preview
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(Color(nsColor: tokens.borderSubtle), lineWidth: 1)
-                )
-        case .split:
-            HSplitView {
-                source
-                    .frame(minWidth: 220)
-                preview
-                    .frame(minWidth: 220)
+        // Per-pane markdown mode (Source / MD-Split / Preview) — independent of note split.
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                ForEach(NoteEditorMode.allCases) { m in
+                    Button {
+                        if isSecondary {
+                            viewModel.secondaryEditorMode = m
+                            viewModel.focusPane(.secondary)
+                        } else {
+                            viewModel.editorMode = m
+                            viewModel.focusPane(.primary)
+                        }
+                    } label: {
+                        Image(systemName: m.systemImage)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color(nsColor: mode == m ? tokens.accentBright : tokens.textTertiary))
+                            .padding(4)
+                    }
+                    .buttonStyle(.plain)
+                    .help(m.label)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+
+            Group {
+                switch mode {
+                case .source:
+                    source
+                case .preview:
+                    preview
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(Color(nsColor: tokens.borderSubtle), lineWidth: 1)
+                        )
+                case .split:
+                    HSplitView {
+                        source
+                            .frame(minWidth: 160)
+                        preview
+                            .frame(minWidth: 160)
+                    }
+                }
             }
         }
     }
 
-    private var noteSourceEditor: some View {
-        NoteTextEditor(
-            editorBridge: viewModel.editorBridge,
-            text: viewModel.bodyBinding,
-            selectedRange: $viewModel.selectedRange,
-            activeMisspelling: viewModel.activeSuggestion,
-            lockedSpans: viewModel.draftLockedSpans,
-            editorFont: appearance.bodyFont(),
-            textColor: tokens.textPrimary,
-            backgroundColor: tokens.editor,
-            lockedBackgroundColor: tokens.lockFill,
-            lockedTextColor: tokens.lockText,
-            accentColor: tokens.accent,
-            borderColor: tokens.borderStrong,
-            onEditingChanged: {
-                viewModel.markDirtyFromEditor()
-            },
-            onWordBoundary: {
-                viewModel.handleWordBoundary()
-            },
-            onCommandNumber: { n in
-                viewModel.applySuggestionShortcut(number: n)
-            },
-            onApplySuggestion: { suggestion, miss in
-                viewModel.applySuggestion(suggestion, for: miss)
-            },
-            onDismissSuggestions: {
-                viewModel.dismissSuggestions()
-            },
-            canEdit: { range, rep in
-                viewModel.canEdit(range: range, replacement: rep)
-            },
-            commitEditorChange: { newText, edited, replacement, preSpans in
-                viewModel.commitEditorChange(
-                    newText: newText,
-                    edited: edited,
-                    replacement: replacement,
-                    previousSpans: preSpans
+    private func noteSourceEditor(isSecondary: Bool) -> some View {
+        Group {
+            if isSecondary {
+                NoteTextEditor(
+                    editorBridge: viewModel.secondaryEditorBridge,
+                    text: viewModel.secondaryBodyBinding,
+                    selectedRange: $viewModel.secondarySelectedRange,
+                    activeMisspelling: viewModel.secondaryActiveSuggestion,
+                    lockedSpans: viewModel.secondaryDraftLockedSpans,
+                    editorFont: appearance.bodyFont(),
+                    textColor: tokens.textPrimary,
+                    backgroundColor: tokens.editor,
+                    lockedBackgroundColor: tokens.lockFill,
+                    lockedTextColor: tokens.lockText,
+                    accentColor: tokens.accent,
+                    borderColor: tokens.borderStrong,
+                    onEditingChanged: {
+                        viewModel.focusPane(.secondary)
+                        viewModel.markSecondaryDirtyFromEditor()
+                    },
+                    onWordBoundary: {
+                        viewModel.focusPane(.secondary)
+                        viewModel.handleWordBoundary()
+                    },
+                    onCommandNumber: { n in
+                        viewModel.focusPane(.secondary)
+                        viewModel.applySuggestionShortcut(number: n)
+                    },
+                    onApplySuggestion: { suggestion, miss in
+                        viewModel.focusPane(.secondary)
+                        viewModel.applySuggestion(suggestion, for: miss)
+                    },
+                    onDismissSuggestions: {
+                        viewModel.secondaryActiveSuggestion = nil
+                    },
+                    canEdit: { range, rep in
+                        viewModel.canEditSecondary(range: range, replacement: rep)
+                    },
+                    commitEditorChange: { newText, edited, replacement, preSpans in
+                        viewModel.focusPane(.secondary)
+                        viewModel.commitSecondaryEditorChange(
+                            newText: newText,
+                            edited: edited,
+                            replacement: replacement,
+                            previousSpans: preSpans
+                        )
+                    },
+                    smartDelete: { range in
+                        viewModel.focusPane(.secondary)
+                        viewModel.smartDeleteSecondary(range: range)
+                    },
+                    currentLockedSpans: {
+                        viewModel.secondaryDraftLockedSpans
+                    },
+                    onBlockedEdit: {
+                        viewModel.notifyBlockedEdit()
+                    },
+                    restoreSnapshot: { text, spans, sel in
+                        viewModel.restoreSecondarySnapshot(text: text, spans: spans, selection: sel)
+                    }
                 )
-            },
-            smartDelete: { range in
-                viewModel.smartDelete(range: range)
-            },
-            currentLockedSpans: {
-                viewModel.draftLockedSpans
-            },
-            onBlockedEdit: {
-                viewModel.notifyBlockedEdit()
-            },
-            restoreSnapshot: { text, spans, sel in
-                viewModel.restoreSnapshot(text: text, spans: spans, selection: sel)
+            } else {
+                NoteTextEditor(
+                    editorBridge: viewModel.editorBridge,
+                    text: viewModel.bodyBinding,
+                    selectedRange: $viewModel.selectedRange,
+                    activeMisspelling: viewModel.activeSuggestion,
+                    lockedSpans: viewModel.draftLockedSpans,
+                    editorFont: appearance.bodyFont(),
+                    textColor: tokens.textPrimary,
+                    backgroundColor: tokens.editor,
+                    lockedBackgroundColor: tokens.lockFill,
+                    lockedTextColor: tokens.lockText,
+                    accentColor: tokens.accent,
+                    borderColor: tokens.borderStrong,
+                    onEditingChanged: {
+                        viewModel.focusPane(.primary)
+                        viewModel.markDirtyFromEditor()
+                    },
+                    onWordBoundary: {
+                        viewModel.focusPane(.primary)
+                        viewModel.handleWordBoundary()
+                    },
+                    onCommandNumber: { n in
+                        viewModel.focusPane(.primary)
+                        viewModel.applySuggestionShortcut(number: n)
+                    },
+                    onApplySuggestion: { suggestion, miss in
+                        viewModel.focusPane(.primary)
+                        viewModel.applySuggestion(suggestion, for: miss)
+                    },
+                    onDismissSuggestions: {
+                        viewModel.dismissSuggestions()
+                    },
+                    canEdit: { range, rep in
+                        viewModel.canEdit(range: range, replacement: rep)
+                    },
+                    commitEditorChange: { newText, edited, replacement, preSpans in
+                        viewModel.focusPane(.primary)
+                        viewModel.commitEditorChange(
+                            newText: newText,
+                            edited: edited,
+                            replacement: replacement,
+                            previousSpans: preSpans
+                        )
+                    },
+                    smartDelete: { range in
+                        viewModel.focusPane(.primary)
+                        viewModel.smartDelete(range: range)
+                    },
+                    currentLockedSpans: {
+                        viewModel.draftLockedSpans
+                    },
+                    onBlockedEdit: {
+                        viewModel.notifyBlockedEdit()
+                    },
+                    restoreSnapshot: { text, spans, sel in
+                        viewModel.restoreSnapshot(text: text, spans: spans, selection: sel)
+                    }
+                )
             }
-        )
+        }
     }
 
     @ViewBuilder
     private var detail: some View {
-        if viewModel.selectedNoteID != nil {
+        if viewModel.selectedNoteID != nil || viewModel.secondaryNoteID != nil {
             VStack(spacing: 0) {
                 NotesCommandStrip(
                     viewModel: viewModel,
@@ -569,60 +816,20 @@ struct NotesRootView: View {
                     regionsMenuPresented: $regionsMenuPresented
                 )
 
-                // Title + metadata (folder/tags with suggestions + colors)
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        Text("›")
-                            .font(.system(size: 18, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color(nsColor: tokens.accent))
-                        TextField("untitled", text: viewModel.titleBinding)
-                            .textFieldStyle(.plain)
-                            .font(Font(appearance.titleFont()))
-                            .foregroundStyle(Color(nsColor: tokens.textPrimary))
-                        Spacer()
-                    }
-                    HStack(alignment: .top, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("folder")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Color(nsColor: tokens.textTertiary))
-                            FolderPickerField(
-                                folder: Binding(
-                                    get: { viewModel.draftFolder },
-                                    set: { viewModel.setFolder($0) }
-                                ),
-                                knownFolders: viewModel.allFolders,
-                                taxonomy: taxonomy,
-                                onChange: { viewModel.setFolder($0) }
-                            )
-                            .frame(minWidth: 140, maxWidth: 200)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("tags")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Color(nsColor: tokens.textTertiary))
-                            TagsPickerField(
-                                tagsText: Binding(
-                                    get: { viewModel.draftTagsText },
-                                    set: { viewModel.setTagsText($0) }
-                                ),
-                                knownTags: viewModel.allTags,
-                                taxonomy: taxonomy,
-                                onChange: { viewModel.setTagsText($0) }
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color(nsColor: tokens.chromeBar))
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
+                if !viewModel.openTabIDs.isEmpty {
+                    NotesTabBar(viewModel: viewModel)
                 }
 
-                editorWorkspace
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 2)
+                if viewModel.isNoteSplit {
+                    HSplitView {
+                        notePane(isSecondary: false)
+                            .frame(minWidth: 280)
+                        notePane(isSecondary: true)
+                            .frame(minWidth: 280)
+                    }
+                } else {
+                    notePane(isSecondary: false)
+                }
 
                 NotesStatusBar(
                     viewModel: viewModel,
@@ -642,6 +849,157 @@ struct NotesRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: tokens.editor))
+        }
+    }
+
+    /// One note column: metadata + markdown Source/Split/Preview editor.
+    @ViewBuilder
+    private func notePane(isSecondary: Bool) -> some View {
+        let focused = isSecondary
+            ? (viewModel.focusedPane == .secondary)
+            : (viewModel.focusedPane == .primary || !viewModel.isNoteSplit)
+        let hasNote = isSecondary ? viewModel.secondaryNoteID != nil : viewModel.selectedNoteID != nil
+
+        VStack(spacing: 0) {
+            if viewModel.isNoteSplit {
+                HStack(spacing: 8) {
+                    Text(isSecondary ? "right" : "left")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: focused ? tokens.accentBright : tokens.textTertiary))
+                    Spacer()
+                    if isSecondary {
+                        Button("Close split") {
+                            viewModel.closeNoteSplit()
+                        }
+                        .font(.system(size: 10, design: .monospaced))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: focused ? tokens.accentDim : tokens.chromeBar))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.focusPane(isSecondary ? .secondary : .primary)
+                }
+            }
+
+            if hasNote {
+                noteChrome(isSecondary: isSecondary)
+                editorWorkspace(isSecondary: isSecondary)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 2)
+                    .onTapGesture {
+                        viewModel.focusPane(isSecondary ? .secondary : .primary)
+                    }
+            } else {
+                VStack(spacing: 8) {
+                    Text(isSecondary ? "pick a note for the right pane" : "select a note")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textSecondary))
+                    Text("use sidebar or Open in Split")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: tokens.editor))
+                .onTapGesture {
+                    viewModel.focusPane(isSecondary ? .secondary : .primary)
+                }
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 0)
+                .strokeBorder(
+                    focused && viewModel.isNoteSplit
+                        ? Color(nsColor: tokens.accent).opacity(0.45)
+                        : Color.clear,
+                    lineWidth: 1
+                )
+        )
+    }
+
+    @ViewBuilder
+    private func noteChrome(isSecondary: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("›")
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color(nsColor: tokens.accent))
+                if isSecondary {
+                    TextField("untitled", text: viewModel.secondaryTitleBinding)
+                        .textFieldStyle(.plain)
+                        .font(Font(appearance.titleFont()))
+                        .foregroundStyle(Color(nsColor: tokens.textPrimary))
+                        .onTapGesture { viewModel.focusPane(.secondary) }
+                } else {
+                    TextField("untitled", text: viewModel.titleBinding)
+                        .textFieldStyle(.plain)
+                        .font(Font(appearance.titleFont()))
+                        .foregroundStyle(Color(nsColor: tokens.textPrimary))
+                        .onTapGesture { viewModel.focusPane(.primary) }
+                }
+                Spacer()
+            }
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("folder")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                    if isSecondary {
+                        FolderPickerField(
+                            folder: Binding(
+                                get: { viewModel.secondaryDraftFolder },
+                                set: { viewModel.setSecondaryFolder($0) }
+                            ),
+                            knownFolders: viewModel.allFolders,
+                            taxonomy: taxonomy
+                        )
+                        .frame(minWidth: 120, maxWidth: 180)
+                    } else {
+                        FolderPickerField(
+                            folder: Binding(
+                                get: { viewModel.draftFolder },
+                                set: { viewModel.setFolder($0) }
+                            ),
+                            knownFolders: viewModel.allFolders,
+                            taxonomy: taxonomy
+                        )
+                        .frame(minWidth: 120, maxWidth: 180)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("tags")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                    if isSecondary {
+                        TagsPickerField(
+                            tagsText: Binding(
+                                get: { viewModel.secondaryDraftTagsText },
+                                set: { viewModel.setSecondaryTagsText($0) }
+                            ),
+                            knownTags: viewModel.allTags,
+                            taxonomy: taxonomy
+                        )
+                    } else {
+                        TagsPickerField(
+                            tagsText: Binding(
+                                get: { viewModel.draftTagsText },
+                                set: { viewModel.setTagsText($0) }
+                            ),
+                            knownTags: viewModel.allTags,
+                            taxonomy: taxonomy
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: tokens.chromeBar))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color(nsColor: tokens.borderSubtle)).frame(height: 1)
         }
     }
 
@@ -675,6 +1033,72 @@ struct NotesRootView: View {
             showDirtyFromTemplateAlert = true
         } else {
             _ = viewModel.createNoteFromTemplate(id, force: true)
+        }
+    }
+}
+
+
+// MARK: - Quick switcher (⌘P)
+
+struct QuickSwitcherView: View {
+    @ObservedObject var viewModel: NotesViewModel
+    @Environment(\.notesTokens) private var tokens
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                TextField("Jump to note…", text: $viewModel.quickSwitcherQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, design: .monospaced))
+                    .focused($focused)
+                    .onSubmit { selectFirst() }
+                Button("Esc") {
+                    viewModel.closeQuickSwitcher()
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color(nsColor: tokens.textTertiary))
+            }
+            .padding(12)
+            .background(Color(nsColor: tokens.chromeBar))
+
+            List(viewModel.quickSwitcherResults()) { note in
+                Button {
+                    viewModel.selectFromQuickSwitcher(note.id)
+                    dismiss()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(note.displayTitle)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: tokens.textPrimary))
+                        Text(viewModel.relativePath(for: note.id) ?? note.folder ?? "")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Color(nsColor: tokens.textTertiary))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color(nsColor: tokens.sidebar))
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: tokens.editor))
+        }
+        .frame(width: 480, height: 360)
+        .background(Color(nsColor: tokens.window))
+        .onAppear { focused = true }
+    }
+
+    private func selectFirst() {
+        if let first = viewModel.quickSwitcherResults().first {
+            viewModel.selectFromQuickSwitcher(first.id)
+            dismiss()
         }
     }
 }

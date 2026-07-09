@@ -53,7 +53,7 @@ struct TaxonomyColorPickerMenu: View {
 
 // MARK: - Filter / label chip
 
-struct TaxonomyChip: View {
+struct TaxonomyChip<MenuExtra: View>: View {
     @Environment(\.notesTokens) private var t
     let title: String
     let palette: TaxonomyPalette
@@ -61,6 +61,25 @@ struct TaxonomyChip: View {
     var showDot: Bool = true
     let action: () -> Void
     var onColorPick: ((TaxonomyPalette) -> Void)? = nil
+    @ViewBuilder var contextMenuExtra: () -> MenuExtra
+
+    init(
+        title: String,
+        palette: TaxonomyPalette,
+        selected: Bool = false,
+        showDot: Bool = true,
+        action: @escaping () -> Void,
+        onColorPick: ((TaxonomyPalette) -> Void)? = nil,
+        @ViewBuilder contextMenuExtra: @escaping () -> MenuExtra = { EmptyView() }
+    ) {
+        self.title = title
+        self.palette = palette
+        self.selected = selected
+        self.showDot = showDot
+        self.action = action
+        self.onColorPick = onColorPick
+        self.contextMenuExtra = contextMenuExtra
+    }
 
     var body: some View {
         Button(action: action) {
@@ -91,7 +110,9 @@ struct TaxonomyChip: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            contextMenuExtra()
             if let onColorPick {
+                Divider()
                 ForEach(TaxonomyPalette.allCases) { p in
                     Button {
                         onColorPick(p)
@@ -115,7 +136,9 @@ struct FolderPickerField: View {
     @Binding var folder: String
     let knownFolders: [String]
     @ObservedObject var taxonomy: TaxonomyController
-    var onChange: (String) -> Void
+    /// Optional extra callback. Prefer driving folder changes only via `folder` Binding
+    /// to avoid double `setFolder` (Binding set + onChange).
+    var onChange: ((String) -> Void)? = nil
 
     @State private var draft: String = ""
     @State private var showSuggest = false
@@ -216,8 +239,11 @@ struct FolderPickerField: View {
     private func commit(_ raw: String) {
         let n = NoteTagging.normalizeFolder(raw) ?? ""
         draft = n
-        folder = n
-        onChange(n)
+        // Drive via Binding only when value actually changes (avoids no-op loops).
+        if folder != n {
+            folder = n
+        }
+        onChange?(n)
         showSuggest = false
     }
 }
@@ -229,7 +255,9 @@ struct TagsPickerField: View {
     @Binding var tagsText: String
     let knownTags: [String]
     @ObservedObject var taxonomy: TaxonomyController
-    var onChange: (String) -> Void
+    /// Optional extra callback. Prefer driving tag changes only via `tagsText` Binding
+    /// to avoid double `setTagsText` (Binding set + onChange).
+    var onChange: ((String) -> Void)? = nil
 
     @State private var input: String = ""
     @State private var showSuggest = false
@@ -383,8 +411,11 @@ struct TagsPickerField: View {
 
     private func apply(_ next: [String]) {
         let text = NoteTagging.tagsDisplayString(next)
-        tagsText = text
-        onChange(text)
+        // Drive via Binding only when value actually changes (avoids no-op loops).
+        if tagsText != text {
+            tagsText = text
+        }
+        onChange?(text)
     }
 }
 

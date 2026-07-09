@@ -35,6 +35,47 @@ final class TaxonomyController: ObservableObject {
         settings = s
     }
 
+    /// Move a color entry when a tag is renamed (case-insensitive keys).
+    func renameTagColor(from old: String, to new: String) {
+        let o = old.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let n = new.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !o.isEmpty, !n.isEmpty, o != n else { return }
+        var s = settings
+        if let raw = s.tagColors.removeValue(forKey: o) {
+            s.tagColors[n] = raw
+            settings = s
+        }
+    }
+
+    func removeTagColor(_ name: String) {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
+        var s = settings
+        if s.tagColors.removeValue(forKey: key) != nil {
+            settings = s
+        }
+    }
+
+    func renameFolderColor(from old: String, to new: String) {
+        let o = old.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let n = new.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !o.isEmpty, !n.isEmpty, o != n else { return }
+        var s = settings
+        if let raw = s.folderColors.removeValue(forKey: o) {
+            s.folderColors[n] = raw
+            settings = s
+        }
+    }
+
+    func removeFolderColor(_ name: String) {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
+        var s = settings
+        if s.folderColors.removeValue(forKey: key) != nil {
+            settings = s
+        }
+    }
+
     func tagNSColor(_ name: String) -> NSColor { tagPalette(name).nsColor }
     func folderNSColor(_ name: String) -> NSColor { folderPalette(name).nsColor }
 }

@@ -1,12 +1,53 @@
 import SwiftUI
+import AppKit
 import BiSpellCore
 
 struct SettingsView: View {
     @ObservedObject var session: SpellSessionController
+    var notesViewModel: NotesViewModel?
     @State private var newDeniedBundleID: String = ""
+    @State private var libraryPathDraft: String = ""
 
     var body: some View {
         Form {
+            Section("Notes library") {
+                LabeledContent("Location") {
+                    Text(libraryPathDraft.isEmpty ? session.settings.libraryPath : libraryPathDraft)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Choose Folder…") { chooseLibraryFolder() }
+                    Button("Reveal in Finder") {
+                        if let vm = notesViewModel {
+                            vm.revealLibraryInFinder()
+                        } else {
+                            NSWorkspace.shared.open(session.settings.libraryRootURL)
+                        }
+                    }
+                }
+                HStack {
+                    Button("Migrate from App Support…") {
+                        let n = notesViewModel?.migrateFromAppSupport() ?? 0
+                        // status shown in notes
+                        _ = n
+                    }
+                    .help("Import notes from ~/Library/Application Support/BiSpell/Notes without deleting them")
+                    Button("Backup ZIP…") {
+                        _ = notesViewModel?.backupLibrary()
+                    }
+                }
+                if let vm = notesViewModel, vm.trashCount > 0 {
+                    Button("Empty Trash (\(vm.trashCount))") {
+                        vm.emptyTrash()
+                    }
+                }
+                Text("Notes are Markdown files under this folder. Changing a note’s folder moves its files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Status") {
                 LabeledContent("Accessibility") {
                     HStack {
@@ -136,7 +177,29 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: 420, minHeight: 520)
+        .onAppear {
+            libraryPathDraft = session.settings.libraryPath
+        }
+    }
+
+    private func chooseLibraryFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Use as Library"
+        panel.message = "Choose the parent folder for BiSpell notes (Markdown + sidecars)."
+        panel.directoryURL = session.settings.libraryRootURL
+        panel.begin { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            let display = LibraryPaths.displayPath(for: url)
+            var s = session.settings
+            s.libraryPath = display
+            session.updateSettings(s)
+            libraryPathDraft = display
+            notesViewModel?.rebindLibrary(to: url, migrateLegacy: false)
+        }
     }
 
     private func addDeniedBundleID() {
@@ -144,7 +207,6 @@ struct SettingsView: View {
         newDeniedBundleID = ""
     }
 
-    /// Ignored words, globally and per-app (formatted "word — in AppBundleID").
     private func ignoredWordEntries() -> [String] {
         let lexicon = session.engine.lexicon
         var entries = lexicon.ignoredWords.sorted()

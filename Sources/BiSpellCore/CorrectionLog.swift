@@ -118,6 +118,36 @@ public final class CorrectionLogStore: @unchecked Sendable {
         }
     }
 
+
+    /// Preferred correction for a wrong word (highest count), case-insensitive.
+    public func preferredCorrect(for wrong: String) -> String? {
+        let key = wrong.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return nil }
+        return queue.sync {
+            file.corrections
+                .filter { $0.wrong.lowercased() == key }
+                .max(by: { $0.count < $1.count })?
+                .correct
+        }
+    }
+
+    /// Re-rank suggestions so historically preferred corrections float to the top.
+    public func rankSuggestions(_ suggestions: [String], wrong: String) -> [String] {
+        let preferred = preferredCorrect(for: wrong)?.lowercased()
+        guard let preferred else { return suggestions }
+        var list = suggestions
+        if let idx = list.firstIndex(where: { $0.lowercased() == preferred }) {
+            let item = list.remove(at: idx)
+            list.insert(item, at: 0)
+            return list
+        }
+        // If we learned a correction not in engine list, prepend it.
+        if let p = preferredCorrect(for: wrong) {
+            return [p] + list.filter { $0.lowercased() != preferred }
+        }
+        return list
+    }
+
     private func reloadFromDiskLocked() {
         if let data = try? Data(contentsOf: url),
            let decoded = try? decoder.decode(CorrectionLogFile.self, from: data) {

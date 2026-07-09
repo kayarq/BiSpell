@@ -14,6 +14,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var debounceMilliseconds: Int
     public var maxSuggestions: Int
     public var minWordLength: Int
+    /// User-chosen library parent folder path (may use `~/…`).
+    public var libraryPath: String
+    /// Reserved: YAML front-matter write-back is not implemented yet.
+    /// Saves always write pure markdown body; tags/title/locks live in the sidecar.
+    /// Defaults to `false`. Kept for settings forward-compat when write-back ships.
+    public var writeYAMLFrontMatter: Bool
+
+    public static var defaultLibraryPath: String {
+        LibraryPaths.displayPath(for: LibraryPaths.defaultLibraryRoot())
+    }
 
     public static let `default` = AppSettings(
         isEnabled: true,
@@ -32,7 +42,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         ],
         debounceMilliseconds: 250,
         maxSuggestions: 5,
-        minWordLength: 2
+        minWordLength: 2,
+        libraryPath: AppSettings.defaultLibraryPath,
+        writeYAMLFrontMatter: false
     )
 
     public init(
@@ -46,7 +58,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         deniedBundleIDs: Set<String>,
         debounceMilliseconds: Int,
         maxSuggestions: Int,
-        minWordLength: Int
+        minWordLength: Int,
+        libraryPath: String = AppSettings.defaultLibraryPath,
+        writeYAMLFrontMatter: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.turkishEnabled = turkishEnabled
@@ -59,6 +73,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.debounceMilliseconds = debounceMilliseconds
         self.maxSuggestions = maxSuggestions
         self.minWordLength = minWordLength
+        self.libraryPath = libraryPath
+        self.writeYAMLFrontMatter = writeYAMLFrontMatter
     }
 
     // Preserve older saved settings when new keys appear.
@@ -75,6 +91,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         debounceMilliseconds = try c.decodeIfPresent(Int.self, forKey: .debounceMilliseconds) ?? Self.default.debounceMilliseconds
         maxSuggestions = try c.decodeIfPresent(Int.self, forKey: .maxSuggestions) ?? Self.default.maxSuggestions
         minWordLength = try c.decodeIfPresent(Int.self, forKey: .minWordLength) ?? Self.default.minWordLength
+        libraryPath = try c.decodeIfPresent(String.self, forKey: .libraryPath) ?? Self.defaultLibraryPath
+        // Default false: write-back is not wired; old `true` in saved settings is inert.
+        writeYAMLFrontMatter = try c.decodeIfPresent(Bool.self, forKey: .writeYAMLFrontMatter) ?? false
+    }
+
+    public var libraryRootURL: URL {
+        LibraryPaths.expandUserPath(libraryPath)
     }
 }
 

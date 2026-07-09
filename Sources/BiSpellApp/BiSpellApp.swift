@@ -17,9 +17,7 @@ struct BiSpellApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Note") {
-                    if appModel.notesViewModel.isDirty {
-                        appModel.notesViewModel.save()
-                    }
+                    guard appModel.notesViewModel.flushPendingSave() else { return }
                     appModel.notesViewModel.createNote(saveImmediately: true)
                     appModel.showNotesWindow()
                 }
@@ -30,6 +28,26 @@ struct BiSpellApp: App {
                     appModel.notesViewModel.save()
                 }
                 .keyboardShortcut("s", modifiers: [.command])
+            }
+            CommandMenu("Note") {
+                Button("Open Today") {
+                    appModel.notesViewModel.openToday()
+                    appModel.showNotesWindow()
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                Button("Quick Switcher…") {
+                    appModel.notesViewModel.openQuickSwitcher()
+                    appModel.showNotesWindow()
+                }
+                .keyboardShortcut("p", modifiers: [.command])
+                Button("Reveal in Finder") {
+                    appModel.notesViewModel.revealSelectedInFinder()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                Divider()
+                Button("Backup Library…") {
+                    _ = appModel.notesViewModel.backupLibrary()
+                }
             }
             CommandMenu("Spelling") {
                 Button("Show Suggestions at Caret") {
@@ -60,7 +78,7 @@ struct BiSpellApp: App {
         }
 
         Settings {
-            SettingsView(session: appModel.session)
+            SettingsView(session: appModel.session, notesViewModel: appModel.notesViewModel)
         }
     }
 }
@@ -75,6 +93,11 @@ private struct MenuContent: View {
 
         Button("Open Notes") {
             openWindow(id: "notes")
+            appModel.showNotesWindow()
+        }
+        Button("Open Today") {
+            openWindow(id: "notes")
+            appModel.notesViewModel.openToday()
             appModel.showNotesWindow()
         }
         Divider()
@@ -118,7 +141,9 @@ private struct MenuContent: View {
 final class AppModel: NSObject, NSApplicationDelegate, ObservableObject {
     let session = SpellSessionController()
     private(set) lazy var notesViewModel: NotesViewModel = {
-        NotesViewModel(store: NotesStore(), engine: session.engine)
+        let root = session.settings.libraryRootURL
+        let store = NotesStore(libraryRoot: root)
+        return NotesViewModel(store: store, engine: session.engine, autoMigrateLegacy: true)
     }()
     let notesAppearance = NotesAppearanceController()
     private let hotkeys = HotkeyManager()
@@ -162,7 +187,8 @@ final class AppModel: NSObject, NSApplicationDelegate, ObservableObject {
             alert.addButton(withTitle: "Cancel")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                notesViewModel.save()
+                // Never quit if save failed — draft stays dirty with "Save failed".
+                guard notesViewModel.flushPendingSave() else { return .terminateCancel }
                 return .terminateNow
             case .alertSecondButtonReturn:
                 return .terminateNow

@@ -96,6 +96,15 @@ struct NotesStatusBar: View {
                 )
             }
 
+            if let path = viewModel.selectedRelativePath {
+                NotesStatusPill(
+                    text: path,
+                    interactive: true,
+                    action: { viewModel.revealSelectedInFinder() }
+                )
+                .help("Reveal in Finder")
+            }
+
             Spacer()
 
             Text(viewModel.saveStatus)
