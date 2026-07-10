@@ -73,6 +73,8 @@ static void Lexicon_StoreInjectedPath() {
     // Process override path helper
     paths::set_config_dir_override(dir);
     EXPECT(paths::default_lexicon_path().filename() == "user-lexicon.json");
+    EXPECT(paths::default_settings_path().filename() == "settings.json");
+    EXPECT(paths::default_settings_path().parent_path() == paths::default_lexicon_path().parent_path());
     paths::clear_config_dir_override();
 
     std::filesystem::remove_all(dir);

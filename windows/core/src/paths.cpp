@@ -81,6 +81,10 @@ std::filesystem::path default_lexicon_path() {
     return default_config_dir() / "user-lexicon.json";
 }
 
+std::filesystem::path default_settings_path() {
+    return default_config_dir() / "settings.json";
+}
+
 std::filesystem::path config_file(const std::filesystem::path& dir, std::string_view filename) {
     return dir / std::filesystem::path(std::string(filename));
 }

@@ -51,7 +51,7 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - UserLexicon + file store under `%APPDATA%\BiSpell\`
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
-3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, minimal settings; optional tray.
+3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **persistent settings**, **system tray** (show / quit).
 4. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
@@ -150,8 +150,45 @@ swift build -c release
 - **Do not** delete or rename Swift sources in ways that break `swift build` / `Package.swift`.
 - Implementers: stay inside `windows/` for code; document-only links to Swift for algorithm reference.
 
+## User data (`%APPDATA%\BiSpell\`)
+
+| File | Role |
+|------|------|
+| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`). Loaded at startup; saved when toggles change. |
+| `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
+
+C++ path helpers: `bispell::paths::default_config_dir()`, `default_settings_path()`, `default_lexicon_path()` (Windows → `%APPDATA%\BiSpell\`; injectable override for tests).
+
+C# mirrors the same locations via `BiSpell.Services.AppPaths` / `SettingsStore`.
+
+### Persistence smoke tests (Windows host)
+
+**Settings across relaunch**
+
+1. Launch BiSpell, note status line shows paths under `%APPDATA%\BiSpell\`.
+2. Uncheck **Turkish** (leave English on), set **Max suggestions** to `3`, optionally uncheck **Spell-check enabled**.
+3. Quit via tray **Quit** (or close then Quit).
+4. Confirm `%APPDATA%\BiSpell\settings.json` contains the chosen values.
+5. Relaunch → UI toggles match; Check with `isEnabled=false` returns no misspellings; with languages restored, max suggestions caps the list.
+
+**Lexicon across relaunch**
+
+1. Paste a nonsense token (e.g. `BiSpellPersistXYZ`) and Check → it is flagged.
+2. Select it → **Add to dictionary**.
+3. Quit and relaunch (same user profile).
+4. Paste the same token → Check → **not** flagged.
+5. Confirm `%APPDATA%\BiSpell\user-lexicon.json` lists the word under `addedWords` (or equivalent).
+
+### Tray (notification area)
+
+- Unpackaged WinUI has no first-party tray control; the shell uses **WinForms `NotifyIcon`** (`UseWindowsForms` in the csproj).
+- Menu: **Show BiSpell** (activate main window), **Quit** (dispose tray + exit).
+- Double-click tray icon = show window.
+- Closing the main window **hides to tray** (does not quit); use **Quit** to exit cleanly.
+- Still **no** system-wide other-app injection / UI Automation overlay (out of MVP; optional later probe only).
+
 ## Status
 
-C++ core + tests + C ABI are in place. **U4:** C# WinUI 3 shell under `windows/app/` P/Invokes `bispell_core.dll` (see [`windows/README.md`](../windows/README.md)).
+C++ core + tests + C ABI are in place. **U4:** C# WinUI 3 shell under `windows/app/` P/Invokes `bispell_core.dll`. **U5:** settings persistence (`settings.json`), tray show/quit, AppData path polish (see [`windows/README.md`](../windows/README.md)).
 
 **Environment note:** full WinUI binary smoke (build + F5 on Windows) is not run on the Linux orchestrator; verify on a Windows host with VS 2022 + Windows App SDK.

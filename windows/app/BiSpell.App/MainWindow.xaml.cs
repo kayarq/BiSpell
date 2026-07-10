@@ -1,5 +1,6 @@
 using BiSpell.Interop;
 using BiSpell.Models;
+using BiSpell.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -9,6 +10,7 @@ namespace BiSpell;
 
 /// <summary>
 /// MVP spell shell: check → list misspellings → suggestions → apply via UTF-16 ranges.
+/// Settings persist to %APPDATA%\BiSpell\settings.json; lexicon to user-lexicon.json.
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
 /// </summary>
@@ -17,17 +19,109 @@ public sealed partial class MainWindow : Window
     private BispellEngine? _engine;
     private MisspellingItem? _selectedMisspelling;
     private string? _lastError;
+    private readonly SettingsStore _settingsStore = new();
+    private AppUserSettings _settings = AppUserSettings.CreateDefault();
+    private bool _suppressSettingsEvents;
+    private string? _lexiconPath;
 
     public MainWindow()
     {
         InitializeComponent();
         Title = "BiSpell — Spell Check";
+
+        LoadSettingsIntoUi();
         TryInitEngine();
+
         Closed += (_, _) =>
         {
+            // Persist latest settings on teardown.
+            try { SaveSettingsFromUi(); } catch { /* ignore */ }
             _engine?.Dispose();
             _engine = null;
         };
+    }
+
+    /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
+    public void PersistSettings() => SaveSettingsFromUi();
+
+    private void LoadSettingsIntoUi()
+    {
+        _settings = _settingsStore.Load();
+        _suppressSettingsEvents = true;
+        try
+        {
+            EnabledCheck.IsChecked = _settings.IsEnabled;
+            TurkishCheck.IsChecked = _settings.TurkishEnabled;
+            EnglishCheck.IsChecked = _settings.EnglishEnabled;
+            MaxSuggestionsBox.Value = _settings.MaxSuggestions;
+        }
+        finally
+        {
+            _suppressSettingsEvents = false;
+        }
+    }
+
+    private void SaveSettingsFromUi()
+    {
+        _settings.IsEnabled = EnabledCheck.IsChecked == true;
+        _settings.TurkishEnabled = TurkishCheck.IsChecked == true;
+        _settings.EnglishEnabled = EnglishCheck.IsChecked == true;
+        _settings.MaxSuggestions = double.IsNaN(MaxSuggestionsBox.Value)
+            ? 5
+            : (int)Math.Clamp(MaxSuggestionsBox.Value, 1, 20);
+        _settings.Normalize();
+        _settingsStore.Save(_settings);
+    }
+
+    private void ApplySettingsToEngine()
+    {
+        if (_engine is null) return;
+        try
+        {
+            _engine.UpdateSettings(_settings.ToNative());
+        }
+        catch (Exception ex)
+        {
+            ShowError("Settings update failed", ex.Message);
+        }
+    }
+
+    private void Settings_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSettingsEvents) return;
+
+        // Keep at least one language on (UI + model).
+        if (TurkishCheck.IsChecked != true && EnglishCheck.IsChecked != true)
+        {
+            _suppressSettingsEvents = true;
+            try
+            {
+                EnglishCheck.IsChecked = true;
+            }
+            finally
+            {
+                _suppressSettingsEvents = false;
+            }
+        }
+
+        SaveSettingsFromUi();
+        ApplySettingsToEngine();
+
+        string state = _settings.IsEnabled ? "enabled" : "disabled";
+        SetStatus(
+            $"Settings saved ({state}; TR={_settings.TurkishEnabled}, EN={_settings.EnglishEnabled}, max={_settings.MaxSuggestions}). Press F7 to re-check.",
+            CountFromList());
+    }
+
+    private void MaxSuggestionsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_suppressSettingsEvents) return;
+        if (double.IsNaN(args.NewValue)) return;
+        SaveSettingsFromUi();
+        ApplySettingsToEngine();
+        SetStatus(
+            $"Max suggestions = {_settings.MaxSuggestions} (saved). Press F7 to re-check.",
+            CountFromList());
     }
 
     private void TryInitEngine()
@@ -61,31 +155,29 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var settings = BispellSettings.CreateDefault();
-            settings.TurkishEnabled = TurkishCheck.IsChecked == true ? 1 : 0;
-            settings.EnglishEnabled = EnglishCheck.IsChecked == true ? 1 : 0;
+            // Ensure latest UI values are in _settings before create.
+            SaveSettingsFromUi();
+            var settings = _settings.ToNative();
 
-            string? lexiconPath = null;
+            _lexiconPath = null;
             try
             {
-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                if (!string.IsNullOrEmpty(appData))
-                {
-                    var dir = Path.Combine(appData, "BiSpell");
-                    Directory.CreateDirectory(dir);
-                    lexiconPath = Path.Combine(dir, "user-lexicon.json");
-                }
+                _lexiconPath = AppPaths.LexiconPath;
             }
             catch
             {
                 // Memory-only lexicon if AppData unavailable.
-                lexiconPath = null;
+                _lexiconPath = null;
             }
 
             _engine?.Dispose();
-            _engine = BispellEngine.Create(dictDir, lexiconPath, settings);
+            _engine = BispellEngine.Create(dictDir, _lexiconPath, settings);
             ErrorBar.IsOpen = false;
-            SetStatus($"Engine ready — dictionaries: {dictDir}", 0);
+
+            var settingsHint = AppPaths.SettingsPath;
+            SetStatus(
+                $"Engine ready — dicts: {dictDir} | settings: {settingsHint} | lexicon: {_lexiconPath ?? "(memory)"}",
+                0);
         }
         catch (DllNotFoundException ex)
         {
@@ -179,6 +271,9 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            // Push latest settings so enable/maxSuggestions gate the check.
+            ApplySettingsToEngine();
+
             var text = EditorBox.Text ?? string.Empty;
             var misspellings = _engine.Check(text);
             MisspellingsList.ItemsSource = misspellings;
@@ -187,9 +282,16 @@ public sealed partial class MainWindow : Window
             UpdateActionButtons();
 
             int n = misspellings.Count;
-            SetStatus(n == 0
-                ? "No misspellings found."
-                : $"Found {n} misspelling{(n == 1 ? "" : "s")}. Select one to see suggestions.", n);
+            if (!_settings.IsEnabled)
+            {
+                SetStatus("Spell-check is disabled in settings — empty result.", 0);
+            }
+            else
+            {
+                SetStatus(n == 0
+                    ? "No misspellings found."
+                    : $"Found {n} misspelling{(n == 1 ? "" : "s")}. Select one to see suggestions.", n);
+            }
             ErrorBar.IsOpen = false;
         }
         catch (BispellException ex)
@@ -386,7 +488,9 @@ public sealed partial class MainWindow : Window
         {
             var word = _selectedMisspelling.Word;
             _engine.AddToDictionary(word);
-            SetStatus($"Added “{word}” to personal dictionary. Re-checking…", CountFromList());
+            SetStatus(
+                $"Added “{word}” to personal dictionary ({_lexiconPath ?? "memory"}). Re-checking…",
+                CountFromList());
             RunCheck();
         }
         catch (Exception ex)
@@ -402,35 +506,12 @@ public sealed partial class MainWindow : Window
         {
             var word = _selectedMisspelling.Word;
             _engine.IgnoreWord(word);
-            SetStatus($"Ignoring “{word}” for this session/lexicon. Re-checking…", CountFromList());
+            SetStatus($"Ignoring “{word}” in lexicon. Re-checking…", CountFromList());
             RunCheck();
         }
         catch (Exception ex)
         {
             ShowError("Ignore failed", ex.Message);
-        }
-    }
-
-    private void LanguageToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_engine is null) return;
-        try
-        {
-            var s = BispellSettings.CreateDefault();
-            s.TurkishEnabled = TurkishCheck.IsChecked == true ? 1 : 0;
-            s.EnglishEnabled = EnglishCheck.IsChecked == true ? 1 : 0;
-            // Keep at least one language on to avoid empty checks looking like errors.
-            if (s.TurkishEnabled == 0 && s.EnglishEnabled == 0)
-            {
-                s.EnglishEnabled = 1;
-                EnglishCheck.IsChecked = true;
-            }
-            _engine.UpdateSettings(s);
-            SetStatus("Language settings updated. Press F7 to re-check.", CountFromList());
-        }
-        catch (Exception ex)
-        {
-            ShowError("Settings update failed", ex.Message);
         }
     }
 

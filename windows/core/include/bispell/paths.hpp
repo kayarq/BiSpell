@@ -22,6 +22,10 @@ std::filesystem::path default_config_dir();
 /// Default user-lexicon JSON path under the config directory.
 std::filesystem::path default_lexicon_path();
 
+/// Default app settings JSON path under the config directory
+/// (`settings.json` — Windows shell SettingsStore; mirrors Swift SettingsStore subset).
+std::filesystem::path default_settings_path();
+
 /// Join config dir with a filename.
 std::filesystem::path config_file(const std::filesystem::path& dir, std::string_view filename);
 

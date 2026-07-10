@@ -14,7 +14,8 @@ This tree hosts a portable C++ spell core (algorithm parity with Swift `BiSpellC
 | Shared lib | `bispell_core.dll` (`bispell_core_shared`, `BISPELL_BUILD_SHARED`) | Loaded by C# host; optional (`-DBISPELL_BUILD_SHARED=OFF`) |
 | UI shell | **C# WinUI 3** (Windows App SDK) | **Product path** — unpackaged F5; XAML ergonomics |
 | Dictionaries | Same `.dic` / `.aff` as macOS | **SoT:** `Sources/BiSpellCore/Resources/Dictionaries/` |
-| User data | `%APPDATA%\BiSpell\` | `user-lexicon.json` |
+| User data | `%APPDATA%\BiSpell\` | `settings.json`, `user-lexicon.json` |
+| Tray | WinForms `NotifyIcon` | Show window / Quit (unpackaged) |
 
 **Future alternative (not dual product path):** a C++/WinRT shell could static-link `bispell_core` in one MSBuild solution later. Keep a single app tree under `windows/app/` (C# today); do not maintain a parallel incomplete C++/WinRT product.
 
@@ -39,7 +40,7 @@ windows/
     src/
   app/                      ← C# WinUI 3 shell (Windows host only)
     BiSpell.sln
-    BiSpell.App/            ← WinUI project + Interop/
+    BiSpell.App/            ← WinUI project + Interop/ + Services/ (settings, tray)
     native/                 ← staged bispell_core.dll (build output; gitignored)
     scripts/                ← build-native.ps1, stage-dictionaries.ps1
   assets/Dictionaries/      ← optional CMake/manual mirror of SoT
@@ -162,7 +163,25 @@ Linux CI / orchestrator does **not** build WinUI.
 5. Select `recieve` → suggestions (ideally include `receive`).
 6. **Enter** or **double-click** a suggestion → text updated at the **UTF-16** range; auto re-check.
 7. **Add to dictionary** / **Ignore** on a nonsense token → re-check no longer flags it.
-8. Toggle TR/EN checkboxes to limit languages; re-check.
+8. Toggle **Spell-check enabled** / TR/EN / **Max suggestions**; re-check. Quit and relaunch → settings still applied.
+9. Tray icon: right-click → **Show BiSpell** / **Quit**. Closing the window hides to tray (not exit).
+
+### Persistence (AppData)
+
+| Path | Contents |
+|------|----------|
+| `%APPDATA%\BiSpell\settings.json` | Enable flags, language toggles, `maxSuggestions`, … |
+| `%APPDATA%\BiSpell\user-lexicon.json` | Words added via **Add to dictionary** / ignore list |
+
+**Lexicon relaunch check:** Add `BiSpellPersistXYZ` → quit → relaunch → same word no longer flagged.
+
+Full steps: [`docs/WINDOWS.md`](../docs/WINDOWS.md) → *User data* / *Persistence smoke tests*.
+
+### Tray
+
+- Notification-area icon via WinForms `NotifyIcon` (no system-wide injection).
+- **Show BiSpell** / double-click: bring main window forward.
+- **Quit**: dispose tray and exit process.
 
 ### Keyboard
 
@@ -193,6 +212,8 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 ## Status
 
 **U4:** C# WinUI 3 shell + real P/Invoke to `c_api.h`, shared DLL CMake target, dictionary packaging, documented Windows build. No Notes port.
+
+**U5:** Settings persistence (`%APPDATA%\BiSpell\settings.json`), tray show/quit, AppData path helpers (`default_settings_path`). Still no system-wide other-app injection.
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).
 
