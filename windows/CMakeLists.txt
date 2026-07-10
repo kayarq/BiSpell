@@ -1,11 +1,12 @@
-# BiSpell Windows tree — top-level CMake (scaffold)
+# BiSpell Windows tree — top-level CMake
 #
-# Targets (added in later units):
+# Targets:
 #   bispell_core        — portable C++17 spell library (Linux + MSVC)
-#   bispell_core_tests  — ctest-friendly unit tests
-#   app/                — WinUI 3 shell (WIN32 only; guarded later)
+#   bispell_core_tests  — aggregate of core unit tests
+#   test_*              — individual ctest executables
+#   app/                — WinUI 3 shell (WIN32 only; later units)
 #
-# Example (core + tests once implemented):
+# Example:
 #   cmake -S windows -B windows/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build windows/build --target bispell_core_tests
 #   cd windows/build && ctest --output-on-failure
@@ -17,11 +18,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Placeholder: subdirectories arrive with core/tests/app implementations.
-# add_subdirectory(core)
-# add_subdirectory(tests)
-# if(WIN32)
-#   add_subdirectory(app)
-# endif()
+# Export compile commands for tooling when available.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-message(STATUS "BiSpell Windows scaffold: add core/tests/app when those units land.")
+enable_testing()
+
+add_subdirectory(core)
+add_subdirectory(tests)
+
+# WinUI shell is Windows-only and arrives in later units.
+if(WIN32)
+    # add_subdirectory(app)
+endif()
+
+message(STATUS "BiSpell Windows: bispell_core + tests configured")

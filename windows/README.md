@@ -10,7 +10,7 @@ This tree hosts a portable C++ spell core (algorithm parity with Swift `BiSpellC
 |--------|--------|--------|
 | Spell core | **C++17** + CMake | Portable; builds on Linux CI and MSVC |
 | UI shell | **WinUI 3** (C++/WinRT preferred) | Check text, misspellings, suggestions, apply |
-| Dictionaries | Same `.dic` / `.aff` as macOS | Source of truth: `Sources/BiSpellCore/Resources/Dictionaries/` |
+| Dictionaries | Same `.dic` / `.aff` as macOS | **SoT:** `Sources/BiSpellCore/Resources/Dictionaries/` (CMake stages; see below) |
 | User data | `%APPDATA%\BiSpell\` | Lexicon + settings (when implemented) |
 
 ### Relation to Swift `BiSpellCore`
@@ -36,9 +36,19 @@ windows/
     include/bispell/     ← public headers
     src/
   app/                   ← WinUI 3 shell (Windows host only)
-  assets/Dictionaries/   ← build-time copy or CMake path to bundled dicts
+  assets/Dictionaries/   ← optional CMake mirror of SoT (not the primary source)
   tests/                 ← core unit tests (Linux + Windows)
 ```
+
+### Dictionaries (source of truth vs mirrors)
+
+| Location | Role |
+|----------|------|
+| `Sources/BiSpellCore/Resources/Dictionaries/` | **Source of truth (SoT)** — edit / vendor dicts here only (shared with macOS Swift) |
+| `windows/build/tests/Dictionaries/` | **CMake stage** — `tests/CMakeLists.txt` copies SoT `.dic`/`.aff` next to test binaries (`BISPELL_DICT_DIR`) for hermetic `ctest` |
+| `windows/assets/Dictionaries/` | **Optional mirror** — CMake may copy SoT `.dic` here for packaging consumers; do not treat as SoT |
+
+Do not hand-edit blobs under `assets/` or the build tree as the primary copy. Configure/build stages from the Swift Resources path automatically.
 
 ## Build
 
@@ -66,7 +76,9 @@ Open the solution under `windows/app/` when it exists, or follow steps in [`docs
 
 ## Status
 
-**Scaffold only** — directory layout and docs. No C++ or WinUI implementation yet.
+**U2 core in place** — portable C++17 `bispell_core` (models, tokenizer, HunspellDictionary) + Linux/MSVC-friendly tests. WinUI shell still later.
+
+Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).
 
 See [`docs/WINDOWS.md`](../docs/WINDOWS.md) for MVP vs non-goals, dictionary paths, fork notes, and the full build matrix.
 

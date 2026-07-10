@@ -58,3 +58,8 @@ Package.StoreAssociation.xml
 *.swp
 *~
 .DS_Store
+
+# Dictionary mirror (CMake stages from Swift Resources SoT)
+assets/Dictionaries/*.dic
+assets/Dictionaries/*.aff
+build/
