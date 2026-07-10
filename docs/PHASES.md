@@ -47,3 +47,7 @@ swift test
 open dist/BiSpell.app
 ```
 Grant **Accessibility** to BiSpell.
+
+## Windows path (separate track)
+
+macOS phases above are **unchanged**. The fork-friendly Windows MVP (C++ core + WinUI 3 shell under `windows/`) is tracked in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) and described in [`WINDOWS.md`](WINDOWS.md).

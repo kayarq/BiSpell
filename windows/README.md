@@ -211,19 +211,25 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 
 ## Status
 
-**U4:** C# WinUI 3 shell + real P/Invoke to `c_api.h`, shared DLL CMake target, dictionary packaging, documented Windows build. No Notes port.
+**MVP integration (U1–U5 + U7):** complete in-tree. Full checklist: [`docs/WINDOWS_PHASES.md`](../docs/WINDOWS_PHASES.md).
 
-**U5:** Settings persistence (`%APPDATA%\BiSpell\settings.json`), tray show/quit, AppData path helpers (`default_settings_path`). Still no system-wide other-app injection.
+| Unit | Summary |
+|------|---------|
+| U2–U3 | C++ core, C ABI, `ctest` on Linux |
+| U4 | C# WinUI 3 + P/Invoke, dictionary packaging, unpackaged F5 |
+| U5 | Settings persistence, tray show/quit, AppData paths |
+| U7 | Docs finalize, SoT note, CMake top-level, `.github/workflows/windows-core.yml` |
+| U6 | Optional UIA probe — **not** MVP |
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).
 
-**Binary smoke:** WinUI app build/F5 cannot run on the Linux orchestrator. On a Windows host: `build-native.ps1` → F5 → paste `I recieve mail. merhabaa dünya` (see App usage above). This is an environment limitation, not a code defect in the C# shell tree.
+**Binary smoke:** WinUI app build/F5 cannot run on the Linux orchestrator or GHA `windows-core`. On a Windows host: `build-native.ps1` → F5 → paste `I recieve mail. merhabaa dünya` (see App usage above). This is an environment limitation, not a code defect in the C# shell tree.
 
 See [`docs/WINDOWS.md`](../docs/WINDOWS.md) for MVP vs non-goals, fork notes, and the full build matrix.
 
-## macOS
+## macOS (unchanged)
 
-Continue using the root README and SwiftPM:
+Primary product remains SwiftPM. Windows work does **not** alter `Package.swift` or `Sources/`:
 
 ```bash
 swift build -c release

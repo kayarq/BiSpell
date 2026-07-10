@@ -51,22 +51,54 @@ While running, use **Probe Frontmost App Support** from the menu. Results are sa
 
 ## License
 
-Personal use. Dictionaries from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses).
+Personal use. Dictionaries from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses). The same TR/EN word lists are shared by the macOS Swift bundle and the Windows path — see [dictionary source of truth](#dictionaries-source-of-truth).
 
 ## Windows (parallel path)
 
-**macOS remains the primary platform** and is unchanged. A fork-friendly Windows MVP lives under [`windows/`](windows/): portable C++17 spell core (parity with Swift `BiSpellCore`) + WinUI 3 shell for check / suggest / apply. It is **not** a port of the Notes UI or system-wide Accessibility overlay.
+**macOS remains the primary platform** and is **unchanged** (`Package.swift`, `Sources/`, SwiftPM). A fork-friendly Windows **MVP** lives under [`windows/`](windows/): portable C++17 spell core (algorithm parity with Swift `BiSpellCore`) + **C# WinUI 3** shell for check / suggest / apply, settings, and tray. It is **not** a port of the Notes UI or system-wide Accessibility overlay.
 
-- Quick start & layout: [`windows/README.md`](windows/README.md)
-- Architecture, MVP vs non-goals, build prerequisites: [`docs/WINDOWS.md`](docs/WINDOWS.md)
+| Doc | Contents |
+|-----|----------|
+| [`windows/README.md`](windows/README.md) | Quick start, layout, build steps, app smoke |
+| [`docs/WINDOWS.md`](docs/WINDOWS.md) | Architecture, MVP vs non-goals, AppData, fork notes |
+| [`docs/WINDOWS_PHASES.md`](docs/WINDOWS_PHASES.md) | Windows MVP phase checklist (U1–U7) |
 
-Core unit tests are intended to build with CMake on Linux or Windows; the WinUI app requires a Windows host (VS 2022, Windows App SDK). Scaffold only until those units land.
+### Portable core (Linux / macOS / Windows)
+
+```bash
+cmake -S windows -B windows/build -DCMAKE_BUILD_TYPE=Release
+cmake --build windows/build --target bispell_core_tests
+cd windows/build && ctest --output-on-failure
+```
+
+Requires CMake ≥ 3.20 and a C++17 compiler (g++ / clang++ / MSVC). Optional CI: [`.github/workflows/windows-core.yml`](.github/workflows/windows-core.yml) (Linux core tests only).
+
+### WinUI app (Windows host only)
+
+1. VS 2022 + Desktop C++ + Windows App SDK / WinUI + .NET 8.
+2. `windows\app\scripts\build-native.ps1` → stages `bispell_core.dll`.
+3. Open `windows/app/BiSpell.sln` → **Debug|x64** → **F5** (unpackaged), or `dotnet build` as in [`windows/README.md`](windows/README.md).
+4. Smoke: paste `I recieve mail. merhabaa dünya` → Check → apply suggestion → Add to dictionary.
+
+Full WinUI binary smoke is **not** run on Linux CI; verify on a Windows machine.
+
+### Dictionaries (source of truth)
+
+| Location | Role |
+|----------|------|
+| **`Sources/BiSpellCore/Resources/Dictionaries/`** | **Single source of truth** (`.dic` / `.aff`) |
+| `windows/build/…/Dictionaries/` | CMake stage for `ctest` |
+| App output `Dictionaries/` | Copied from SoT by `BiSpell.App.csproj` |
+| `windows/assets/Dictionaries/` | Optional mirror (gitignored blobs; staged by CMake / `stage-dictionaries.ps1`) |
+
+Do **not** hand-maintain a second divergent dictionary set. Licenses: [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses).
 
 ## Documentation
 
 - [`plan.md`](plan.md) — original product & architecture plan (also at `docs/plan.md`)
-- [`docs/PHASES.md`](docs/PHASES.md) — phase delivery checklist
+- [`docs/PHASES.md`](docs/PHASES.md) — macOS phase delivery checklist
 - [`docs/WINDOWS.md`](docs/WINDOWS.md) — Windows platform path (C++ core + WinUI 3)
+- [`docs/WINDOWS_PHASES.md`](docs/WINDOWS_PHASES.md) — Windows MVP unit checklist
 
 ## Notes
 

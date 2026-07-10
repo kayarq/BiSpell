@@ -1,0 +1,55 @@
+# Portable Windows-tree C++ core tests (Linux runner).
+# Does NOT build WinUI / C# / MSVC — that requires a Windows host (see docs/WINDOWS_PHASES.md).
+name: windows-core
+
+on:
+  push:
+    paths:
+      - "windows/core/**"
+      - "windows/tests/**"
+      - "windows/CMakeLists.txt"
+      - "Sources/BiSpellCore/Resources/Dictionaries/**"
+      - ".github/workflows/windows-core.yml"
+  pull_request:
+    paths:
+      - "windows/core/**"
+      - "windows/tests/**"
+      - "windows/CMakeLists.txt"
+      - "Sources/BiSpellCore/Resources/Dictionaries/**"
+      - ".github/workflows/windows-core.yml"
+  workflow_dispatch:
+
+jobs:
+  core-tests:
+    name: bispell_core + ctest (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ ninja-build
+
+      - name: Configure
+        run: |
+          cmake -S windows -B windows/build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBISPELL_BUILD_SHARED=ON
+
+      - name: Build core tests
+        run: cmake --build windows/build --target bispell_core_tests
+
+      - name: Test
+        working-directory: windows/build
+        run: ctest --output-on-failure --output-junit test-results.xml
+
+      - name: Upload CTest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-results
+          path: windows/build/test-results.xml
+          if-no-files-found: ignore

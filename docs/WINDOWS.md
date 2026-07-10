@@ -64,9 +64,9 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 - Changing `Package.swift` platforms or deleting/renaming Swift sources.
 - Requiring Linux CI to compile WinUI.
 
-## Dictionary source path
+## Dictionary source path (single source of truth)
 
-**Canonical source (do not fork long-term):**
+**Canonical SoT (only master copy):**
 
 ```
 Sources/BiSpellCore/Resources/Dictionaries/
@@ -76,15 +76,16 @@ Sources/BiSpellCore/Resources/Dictionaries/
   tr.dic
 ```
 
-Windows packaging should either:
+| Consumer | How it gets dicts |
+|----------|-------------------|
+| macOS Swift bundle | `Package.swift` resource copy of SoT |
+| Linux/Windows `ctest` | CMake `configure_file` → `windows/build/tests/Dictionaries/` |
+| C# WinUI app | `BiSpell.App.csproj` copies SoT into output `Dictionaries\` |
+| `windows/assets/Dictionaries/` | Optional mirror only (gitignored `.dic`/`.aff`; CMake or `stage-dictionaries.ps1`) |
 
-- Copy into `windows/assets/Dictionaries/` at **CMake configure/build** time, or
-- Reference the Swift path via CMake variables / configure_file.
+Do **not** hand-maintain two divergent dictionary blobs. Prefer SoT always; assets mirror is a packaging convenience, not a second master.
 
-Do **not** maintain two hand-edited divergent dictionary blobs.
-
-Licenses: same as root README — dictionaries from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses).
-
+Licenses: same as root README — dictionaries from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses). Retained for both macOS and Windows packaging.
 ## Build matrix
 
 | What | Host | Toolchain | Notes |
@@ -104,13 +105,15 @@ Licenses: same as root README — dictionaries from [wooorm/dictionaries](https:
 
 ### Suggested commands
 
-**Portable core (any host with C++17), once implemented:**
+**Portable core (any host with C++17) — clean clone:**
 
 ```bash
 cmake -S windows -B windows/build -DCMAKE_BUILD_TYPE=Release
 cmake --build windows/build --target bispell_core_tests
 cd windows/build && ctest --output-on-failure
 ```
+
+Expected: 6/6 tests pass. Optional CI: [`.github/workflows/windows-core.yml`](../.github/workflows/windows-core.yml) (Ubuntu, core only).
 
 **WinUI app (Windows only) — C# P/Invoke host:**
 
@@ -122,15 +125,17 @@ cd windows\app\scripts
 # 2) Open windows/app/BiSpell.sln → set BiSpell.App, Debug|x64 → F5 (unpackaged)
 #    or: dotnet build windows\app\BiSpell.App\BiSpell.App.csproj -c Release -p:Platform=x64
 # Full steps: windows/README.md
+# MVP smoke checklist: docs/WINDOWS_PHASES.md
 ```
 
-**macOS (must keep working):**
+**macOS (primary product — unchanged):**
 
 ```bash
 swift test
 swift build -c release
 ```
 
+`Package.swift` and `Sources/` are not modified by the Windows path.
 ## Layout under `windows/`
 
 | Path | Role |
@@ -139,8 +144,9 @@ swift build -c release
 | `windows/app/` | WinUI 3 shell |
 | `windows/assets/Dictionaries/` | Build-copied or staged dicts (source of truth remains Swift Resources) |
 | `windows/tests/` | Core unit tests |
-| `windows/CMakeLists.txt` | Top-level: core + tests always; app `if(WIN32)` later |
+| `windows/CMakeLists.txt` | Top-level: core + tests **always**; C# app documented / `if(WIN32)` status only (not CMake-built) |
 | `windows/README.md` | Windows-facing quick start |
+| `docs/WINDOWS_PHASES.md` | MVP unit checklist (U1–U7) + clean-clone / Windows smoke |
 
 ## Fork / branch notes
 
@@ -189,6 +195,16 @@ C# mirrors the same locations via `BiSpell.Services.AppPaths` / `SettingsStore`.
 
 ## Status
 
-C++ core + tests + C ABI are in place. **U4:** C# WinUI 3 shell under `windows/app/` P/Invokes `bispell_core.dll`. **U5:** settings persistence (`settings.json`), tray show/quit, AppData path polish (see [`windows/README.md`](../windows/README.md)).
+**Windows MVP (U1–U5 + U7) is integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
 
-**Environment note:** full WinUI binary smoke (build + F5 on Windows) is not run on the Linux orchestrator; verify on a Windows host with VS 2022 + Windows App SDK.
+| Layer | State |
+|-------|--------|
+| C++ core + `ctest` + C ABI | ✅ Linux-verified (`bispell_core_tests`) |
+| C# WinUI 3 shell (check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
+| Settings + tray + AppData | ✅ U5 |
+| Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
+| CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
+| macOS Swift product | ✅ Unchanged |
+| U6 UIA probe | ⬜ Optional post-MVP |
+
+**Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK.

@@ -20,10 +20,11 @@ foreach(_dict en_US.dic en_US.aff tr.dic tr.aff)
     endif()
 endforeach()
 
-# Also mirror into windows/assets/Dictionaries for packaging consumers.
+# Optional packaging mirror under windows/assets/Dictionaries (gitignored blobs).
+# SoT remains Sources/BiSpellCore/Resources/Dictionaries/ — never hand-edit here.
 set(BISPELL_ASSETS_DICT_DIR "${CMAKE_SOURCE_DIR}/assets/Dictionaries")
 file(MAKE_DIRECTORY "${BISPELL_ASSETS_DICT_DIR}")
-foreach(_dict en_US.dic tr.dic)
+foreach(_dict en_US.dic en_US.aff tr.dic tr.aff)
     if(EXISTS "${BISPELL_DICT_SOURCE_DIR}/${_dict}")
         configure_file(
             "${BISPELL_DICT_SOURCE_DIR}/${_dict}"
