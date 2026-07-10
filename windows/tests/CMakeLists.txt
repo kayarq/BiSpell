@@ -51,8 +51,17 @@ endfunction()
 bispell_add_test(test_encoding test_encoding.cpp)
 bispell_add_test(test_tokenizer test_tokenizer.cpp)
 bispell_add_test(test_dictionary test_dictionary.cpp)
+bispell_add_test(test_language_tagger test_language_tagger.cpp)
+bispell_add_test(test_lexicon test_lexicon.cpp)
+bispell_add_test(test_spell_engine test_spell_engine.cpp)
 
 # Aggregate target used by the plan acceptance command line.
 add_custom_target(bispell_core_tests
-    DEPENDS test_encoding test_tokenizer test_dictionary
+    DEPENDS
+        test_encoding
+        test_tokenizer
+        test_dictionary
+        test_language_tagger
+        test_lexicon
+        test_spell_engine
 )

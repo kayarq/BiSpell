@@ -76,7 +76,7 @@ Open the solution under `windows/app/` when it exists, or follow steps in [`docs
 
 ## Status
 
-**U2 core in place** — portable C++17 `bispell_core` (models, tokenizer, HunspellDictionary) + Linux/MSVC-friendly tests. WinUI shell still later.
+**U3 core in place** — U2 plus `SpellEngine`, language heuristics, user lexicon, settings subset, C ABI + RAII wrapper, Linux tests. WinUI shell still later.
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).
 

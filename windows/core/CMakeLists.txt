@@ -5,6 +5,11 @@ add_library(bispell_core STATIC
     src/case_fold.cpp
     src/tokenizer.cpp
     src/dictionary.cpp
+    src/paths.cpp
+    src/user_lexicon.cpp
+    src/language_tagger.cpp
+    src/spell_engine.cpp
+    src/c_api.cpp
 )
 
 add_library(bispell::core ALIAS bispell_core)
@@ -27,3 +32,7 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.1)
     target_link_libraries(bispell_core PUBLIC stdc++fs)
 endif()
+
+# pthread for std::mutex on some platforms (SpellResultCache)
+find_package(Threads REQUIRED)
+target_link_libraries(bispell_core PUBLIC Threads::Threads)
