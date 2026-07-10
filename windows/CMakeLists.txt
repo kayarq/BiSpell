@@ -26,9 +26,11 @@ enable_testing()
 add_subdirectory(core)
 add_subdirectory(tests)
 
-# WinUI shell is Windows-only and arrives in later units.
+# WinUI shell is a C# project (windows/app/BiSpell.sln), not a CMake target.
+# Build native DLL for P/Invoke via: cmake --build <build> --target bispell_core_shared
+# Then open windows/app/BiSpell.sln in Visual Studio 2022 (see windows/README.md).
 if(WIN32)
-    # add_subdirectory(app)
+    message(STATUS "BiSpell Windows: C# WinUI app lives in windows/app (not built by CMake)")
 endif()
 
-message(STATUS "BiSpell Windows: bispell_core + tests configured")
+message(STATUS "BiSpell Windows: bispell_core + tests configured (shared DLL: BISPELL_BUILD_SHARED)")

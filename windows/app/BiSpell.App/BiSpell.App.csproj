@@ -1,0 +1,90 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>BiSpell</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- Unpackaged local dev (F5 without MSIX). See windows/README.md -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Nullable>enable</Nullable>
+    <!-- Prefer x64 for native bispell_core.dll interop -->
+    <Platform Condition="'$(Platform)' == '' OR '$(Platform)' == 'AnyCPU'">x64</Platform>
+    <PlatformTarget Condition="'$(Platform)' == 'x64'">x64</PlatformTarget>
+    <PlatformTarget Condition="'$(Platform)' == 'x86'">x86</PlatformTarget>
+    <PlatformTarget Condition="'$(Platform)' == 'ARM64'">ARM64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <ApplicationTitle>BiSpell</ApplicationTitle>
+    <ApplicationId>com.bispell.windows</ApplicationId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240627000" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.3233" />
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!-- Bundled dictionaries: SoT is Sources/BiSpellCore/Resources/Dictionaries/ -->
+  <ItemGroup>
+    <None Include="..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.dic"
+          Link="Dictionaries\en_US.dic"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.dic')" />
+    <None Include="..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.aff"
+          Link="Dictionaries\en_US.aff"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.aff')" />
+    <None Include="..\..\..\Sources\BiSpellCore\Resources\Dictionaries\tr.dic"
+          Link="Dictionaries\tr.dic"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\tr.dic')" />
+    <None Include="..\..\..\Sources\BiSpellCore\Resources\Dictionaries\tr.aff"
+          Link="Dictionaries\tr.aff"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\tr.aff')" />
+    <!-- Fallback: windows/assets/Dictionaries if SoT path missing -->
+    <None Include="..\..\assets\Dictionaries\*.dic"
+          Link="Dictionaries\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="!Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.dic')" />
+    <None Include="..\..\assets\Dictionaries\*.aff"
+          Link="Dictionaries\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="!Exists('..\..\..\Sources\BiSpellCore\Resources\Dictionaries\en_US.dic')" />
+  </ItemGroup>
+
+  <!-- Native bispell_core.dll (built via CMake) copied from windows/app/native/<RID>/ -->
+  <ItemGroup>
+    <None Include="..\native\$(Platform)\bispell_core.dll"
+          Link="bispell_core.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\native\$(Platform)\bispell_core.dll')" />
+    <None Include="..\native\bispell_core.dll"
+          Link="bispell_core.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\native\bispell_core.dll') AND !Exists('..\native\$(Platform)\bispell_core.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SplashScreen.scale-200.png" Condition="Exists('Assets\SplashScreen.scale-200.png')" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" Condition="Exists('Assets\LockScreenLogo.scale-200.png')" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" Condition="Exists('Assets\Square150x150Logo.scale-200.png')" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" Condition="Exists('Assets\Square44x44Logo.scale-200.png')" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" Condition="Exists('Assets\Square44x44Logo.targetsize-24_altform-unplated.png')" />
+    <Content Include="Assets\StoreLogo.png" Condition="Exists('Assets\StoreLogo.png')" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" Condition="Exists('Assets\Wide310x150Logo.scale-200.png')" />
+  </ItemGroup>
+
+  <!-- Msix capability for tooling (app still runs unpackaged via WindowsPackageType=None) -->
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+</Project>

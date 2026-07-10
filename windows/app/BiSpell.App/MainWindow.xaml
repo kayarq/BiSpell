@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="BiSpell.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:BiSpell"
+    xmlns:models="using:BiSpell.Models"
+    Title="BiSpell — Spell Check">
+
+    <Grid x:Name="RootGrid" Padding="16" RowSpacing="12" ColumnSpacing="12"
+          Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+          KeyDown="RootGrid_KeyDown">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Header + toolbar -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="3" Spacing="8">
+            <TextBlock Text="BiSpell" Style="{StaticResource TitleTextBlockStyle}"/>
+            <TextBlock Text="TR + EN spelling assistant (Windows MVP). Not a Notes port."
+                       Opacity="0.7" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="CheckButton" Content="Check (F7)" Click="CheckButton_Click"
+                        Style="{StaticResource AccentButtonStyle}" MinWidth="120"/>
+                <Button x:Name="ApplyButton" Content="Apply" Click="ApplyButton_Click"
+                        IsEnabled="False" MinWidth="88"/>
+                <Button x:Name="AddDictButton" Content="Add to dictionary" Click="AddDictButton_Click"
+                        IsEnabled="False"/>
+                <Button x:Name="IgnoreButton" Content="Ignore" Click="IgnoreButton_Click"
+                        IsEnabled="False"/>
+                <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="8,4"/>
+                <CheckBox x:Name="TurkishCheck" Content="Turkish" IsChecked="True"
+                          Checked="LanguageToggle_Changed" Unchecked="LanguageToggle_Changed"/>
+                <CheckBox x:Name="EnglishCheck" Content="English" IsChecked="True"
+                          Checked="LanguageToggle_Changed" Unchecked="LanguageToggle_Changed"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Text editor -->
+        <Grid Grid.Row="1" Grid.Column="0" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="Text" Style="{StaticResource SubtitleTextBlockStyle}"/>
+            <TextBox x:Name="EditorBox"
+                     Grid.Row="1"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     PlaceholderText="Paste or type text… e.g. I recieve mail. merhabaa dünya"
+                     FontFamily="Segoe UI"
+                     FontSize="15"
+                     Text="I recieve mail today. merhabaa dünya."/>
+        </Grid>
+
+        <!-- Misspellings -->
+        <Grid Grid.Row="1" Grid.Column="1" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="Misspellings" Style="{StaticResource SubtitleTextBlockStyle}"/>
+            <ListView x:Name="MisspellingsList"
+                      Grid.Row="1"
+                      SelectionChanged="MisspellingsList_SelectionChanged"
+                      DoubleTapped="MisspellingsList_DoubleTapped">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="models:MisspellingItem">
+                        <StackPanel Padding="4,6" Spacing="2">
+                            <TextBlock Text="{x:Bind Display}" TextWrapping="Wrap"
+                                       FontWeight="SemiBold"/>
+                            <TextBlock Text="{x:Bind RangeLabel}" Opacity="0.6" FontSize="12"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- Suggestions -->
+        <Grid Grid.Row="1" Grid.Column="2" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="Suggestions (Enter / double-click apply)"
+                       Style="{StaticResource SubtitleTextBlockStyle}"
+                       TextWrapping="Wrap"/>
+            <ListView x:Name="SuggestionsList"
+                      Grid.Row="1"
+                      SelectionChanged="SuggestionsList_SelectionChanged"
+                      DoubleTapped="SuggestionsList_DoubleTapped"
+                      KeyDown="SuggestionsList_KeyDown"/>
+        </Grid>
+
+        <!-- Engine status / load error -->
+        <InfoBar x:Name="ErrorBar"
+                 Grid.Row="2" Grid.ColumnSpan="3"
+                 IsOpen="False"
+                 Severity="Error"
+                 IsClosable="True"
+                 Title="Engine error"/>
+
+        <!-- Status line -->
+        <Border Grid.Row="3" Grid.ColumnSpan="3"
+                Padding="8,6"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                CornerRadius="4"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusText"
+                           Text="Ready — press F7 or Check to spell-check."
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"/>
+                <TextBlock x:Name="CountBadge"
+                           Grid.Column="1"
+                           Text="0 misspellings"
+                           FontWeight="SemiBold"
+                           Margin="16,0,0,0"
+                           VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

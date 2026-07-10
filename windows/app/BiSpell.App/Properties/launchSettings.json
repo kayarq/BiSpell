@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "BiSpell.App (Unpackaged)": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}

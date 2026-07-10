@@ -18,23 +18,25 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │  core/  C++17  Tokenizer │ HunspellDictionary │ SpellEngine  │
 │         LanguageTagger (heuristics) │ UserLexicon │ Settings │
 │  tests/ ctest on Linux + Windows                            │
-│  app/   WinUI 3 shell ──► links / PInvokes core             │
+│  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
 │         Check text │ Suggestions │ Apply │ Tray │ Settings  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Core**: C++17 static library, no WinRT/Win32 UI headers in public APIs.
+- **Core**: C++17 library (static for tests; shared `bispell_core` for P/Invoke). No WinRT/Win32 UI headers in public APIs.
 - **Ranges**: UTF-16 code unit offsets (parity with macOS `NSRange` for text APIs).
-- **UI**: WinUI 3 native shell for the spell loop — **not** a SwiftUI Notes / taxonomy / templates port.
+- **UI**: C# WinUI 3 shell for the spell loop — **not** a SwiftUI Notes / taxonomy / templates port.
 
 ## Stack choice
 
 | Decision | Choice | Why |
 |----------|--------|-----|
-| Core language | C++17 + CMake | Same tests on Linux orchestrator and MSVC; link into C++/WinRT |
-| UI | WinUI 3 | Modern first-party Windows UI; not WPF/WinForms/full C# SwiftUI clone |
+| Core language | C++17 + CMake | Same tests on Linux orchestrator and MSVC; static lib for tests; shared DLL for C# P/Invoke |
+| UI (product path) | **C# WinUI 3** + P/Invoke | Thin host over `c_api.h`; unpackaged F5 on Windows; not WPF/WinForms/full SwiftUI clone |
 | Dictionary engine | Algorithm parity with Swift `HunspellDictionary` | Stem word-list + restricted-edit suggestions; **not** full libhunspell affix expansion for MVP |
 | System spell API | Optional later | No `NSSpellChecker` equivalent required for MVP |
+
+**Future alternative (not a second product path):** a C++/WinRT shell could static-link `bispell_core` in one MSBuild solution if a single native binary is preferred later. That remains optional; do **not** maintain dual C# and C++/WinRT app trees.
 
 ## MVP vs non-goals
 
@@ -110,12 +112,16 @@ cmake --build windows/build --target bispell_core_tests
 cd windows/build && ctest --output-on-failure
 ```
 
-**WinUI app (Windows only):**
+**WinUI app (Windows only) — C# P/Invoke host:**
 
 ```text
-# Install VS 2022 + Windows App SDK / WinUI as above
-# Open windows/app solution (when present) or build via MSBuild/CMake as documented in windows/README.md
-# Prefer unpackaged F5 for local dev if configured
+# 1) Native DLL (VS 2022 Developer PowerShell)
+cd windows\app\scripts
+.\build-native.ps1 -Platform x64 -Config Release
+
+# 2) Open windows/app/BiSpell.sln → set BiSpell.App, Debug|x64 → F5 (unpackaged)
+#    or: dotnet build windows\app\BiSpell.App\BiSpell.App.csproj -c Release -p:Platform=x64
+# Full steps: windows/README.md
 ```
 
 **macOS (must keep working):**
@@ -146,4 +152,6 @@ swift build -c release
 
 ## Status
 
-Scaffold and documentation only. C++ core, tests, and WinUI app land in subsequent units. See also [`windows/README.md`](../windows/README.md) and the dual-code plan for unit order (U2 core → U3 engine → U4 shell → …).
+C++ core + tests + C ABI are in place. **U4:** C# WinUI 3 shell under `windows/app/` P/Invokes `bispell_core.dll` (see [`windows/README.md`](../windows/README.md)).
+
+**Environment note:** full WinUI binary smoke (build + F5 on Windows) is not run on the Linux orchestrator; verify on a Windows host with VS 2022 + Windows App SDK.
