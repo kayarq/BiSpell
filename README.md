@@ -53,10 +53,20 @@ While running, use **Probe Frontmost App Support** from the menu. Results are sa
 
 Personal use. Dictionaries from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) (respective dictionary licenses).
 
+## Windows (parallel path)
+
+**macOS remains the primary platform** and is unchanged. A fork-friendly Windows MVP lives under [`windows/`](windows/): portable C++17 spell core (parity with Swift `BiSpellCore`) + WinUI 3 shell for check / suggest / apply. It is **not** a port of the Notes UI or system-wide Accessibility overlay.
+
+- Quick start & layout: [`windows/README.md`](windows/README.md)
+- Architecture, MVP vs non-goals, build prerequisites: [`docs/WINDOWS.md`](docs/WINDOWS.md)
+
+Core unit tests are intended to build with CMake on Linux or Windows; the WinUI app requires a Windows host (VS 2022, Windows App SDK). Scaffold only until those units land.
+
 ## Documentation
 
 - [`plan.md`](plan.md) — original product & architecture plan (also at `docs/plan.md`)
 - [`docs/PHASES.md`](docs/PHASES.md) — phase delivery checklist
+- [`docs/WINDOWS.md`](docs/WINDOWS.md) — Windows platform path (C++ core + WinUI 3)
 
 ## Notes
 
