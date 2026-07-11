@@ -15,6 +15,7 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="2*"/>
@@ -153,16 +154,80 @@
                       KeyDown="SuggestionsList_KeyDown"/>
         </Grid>
 
+        <!-- Lexicon management (P1-LEXUI Mandate A): live lists from engine via
+             ListAddedWords / ListIgnoredWords; Remove / Unignore mutate + refresh.
+             Collapsible Expander keeps the check layout compact; no new Window. -->
+        <Expander x:Name="LexiconExpander"
+                  Grid.Row="2" Grid.ColumnSpan="3"
+                  Header="Personal dictionary &amp; ignored words"
+                  IsExpanded="True"
+                  HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Stretch"
+                  VerticalAlignment="Stretch">
+            <Grid Height="160" ColumnSpacing="12" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Added words (personal dictionary) -->
+                <Grid Grid.Column="0" RowSpacing="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="AddedWordsHeader"
+                               Text="Dictionary"
+                               Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    <ListView x:Name="AddedWordsList"
+                              Grid.Row="1"
+                              SelectionMode="Single"
+                              SelectionChanged="AddedWordsList_SelectionChanged"/>
+                    <Button x:Name="RemoveWordButton"
+                            Grid.Row="2"
+                            Content="Remove selected"
+                            Click="RemoveWordButton_Click"
+                            IsEnabled="False"
+                            HorizontalAlignment="Left"
+                            MinWidth="120"/>
+                </Grid>
+
+                <!-- Ignored words -->
+                <Grid Grid.Column="1" RowSpacing="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="IgnoredWordsHeader"
+                               Text="Ignored"
+                               Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    <ListView x:Name="IgnoredWordsList"
+                              Grid.Row="1"
+                              SelectionMode="Single"
+                              SelectionChanged="IgnoredWordsList_SelectionChanged"/>
+                    <Button x:Name="UnignoreWordButton"
+                            Grid.Row="2"
+                            Content="Unignore selected"
+                            Click="UnignoreWordButton_Click"
+                            IsEnabled="False"
+                            HorizontalAlignment="Left"
+                            MinWidth="120"/>
+                </Grid>
+            </Grid>
+        </Expander>
+
         <!-- Engine status / load error -->
         <InfoBar x:Name="ErrorBar"
-                 Grid.Row="2" Grid.ColumnSpan="3"
+                 Grid.Row="3" Grid.ColumnSpan="3"
                  IsOpen="False"
                  Severity="Error"
                  IsClosable="True"
                  Title="Engine error"/>
 
         <!-- Status line -->
-        <Border Grid.Row="3" Grid.ColumnSpan="3"
+        <Border Grid.Row="4" Grid.ColumnSpan="3"
                 Padding="8,6"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 CornerRadius="4"

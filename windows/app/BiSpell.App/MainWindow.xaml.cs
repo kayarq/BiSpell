@@ -21,6 +21,11 @@ namespace BiSpell;
 /// never run mid-tree construction (root cause of ToggleButton.IsChecked assign failure
 /// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength; path hint under
 /// the card title. No debounce UI.
+///
+/// Lexicon panel (P1-LEXUI Mandate A): inline Expander with dual ListViews (Dictionary |
+/// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
+/// ListIgnoredWords; mutations via RemoveFromDictionary / UnignoreWord. Refresh after
+/// add/ignore/remove/unignore and after engine init. No ignore-in-app editor; no new Window.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -285,6 +290,7 @@ public sealed partial class MainWindow : Window
                     "Sources\\BiSpellCore\\Resources\\Dictionaries\\.\n" +
                     "See windows/README.md for packaging steps.");
                 SetStatus("Engine not loaded — missing dictionaries.", 0);
+                RefreshLexiconLists();
                 return;
             }
 
@@ -299,6 +305,7 @@ public sealed partial class MainWindow : Window
                     $"en_US.dic present: {File.Exists(en)}\n" +
                     $"tr.dic present: {File.Exists(tr)}");
                 SetStatus("Engine not loaded — incomplete dictionary folder.", 0);
+                RefreshLexiconLists();
                 return;
             }
 
@@ -320,6 +327,7 @@ public sealed partial class MainWindow : Window
             _engine?.Dispose();
             _engine = BispellEngine.Create(dictDir, _lexiconPath, settings);
             ErrorBar.IsOpen = false;
+            RefreshLexiconLists();
 
             var settingsHint = AppPaths.SettingsPath;
             SetStatus(
@@ -338,6 +346,7 @@ public sealed partial class MainWindow : Window
                 "See windows/README.md — “Build native DLL”.\n\n" +
                 ex.Message);
             SetStatus("Engine not loaded — bispell_core.dll missing.", 0);
+            RefreshLexiconLists();
         }
         catch (BadImageFormatException ex)
         {
@@ -346,17 +355,20 @@ public sealed partial class MainWindow : Window
                 "bispell_core.dll architecture does not match this process (x64 vs x86/ARM64).\n" +
                 "Rebuild the DLL for the same platform as the app.\n\n" + ex.Message);
             SetStatus("Engine not loaded — bad image format.", 0);
+            RefreshLexiconLists();
         }
         catch (BispellException ex)
         {
             ShowError("Failed to load spell engine", ex.Message);
             SetStatus("Engine not loaded — see error bar.", 0);
+            RefreshLexiconLists();
         }
         catch (Exception ex)
         {
             CrashLog.Write(ex);
             ShowError("Unexpected startup error", ex.Message);
             SetStatus("Engine not loaded — unexpected error.", 0);
+            RefreshLexiconLists();
         }
     }
 
@@ -638,6 +650,7 @@ public sealed partial class MainWindow : Window
         {
             var word = _selectedMisspelling.Word;
             _engine.AddToDictionary(word);
+            RefreshLexiconLists();
             SetStatus(
                 $"Added “{word}” to personal dictionary ({_lexiconPath ?? "memory"}). Re-checking…",
                 CountFromList());
@@ -656,6 +669,7 @@ public sealed partial class MainWindow : Window
         {
             var word = _selectedMisspelling.Word;
             _engine.IgnoreWord(word);
+            RefreshLexiconLists();
             SetStatus($"Ignoring “{word}” in lexicon. Re-checking…", CountFromList());
             RunCheck();
         }
@@ -663,6 +677,122 @@ public sealed partial class MainWindow : Window
         {
             ShowError("Ignore failed", ex.Message);
         }
+    }
+
+    private void AddedWordsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => UpdateLexiconActionButtons();
+
+    private void IgnoredWordsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => UpdateLexiconActionButtons();
+
+    private void RemoveWordButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine is null) return;
+        var word = AddedWordsList.SelectedItem as string;
+        if (string.IsNullOrEmpty(word)) return;
+
+        try
+        {
+            _engine.RemoveFromDictionary(word);
+            RefreshLexiconLists();
+            SetStatus(
+                $"Removed “{word}” from personal dictionary. Re-checking…",
+                CountFromList());
+            // Re-check so the word can reappear as a misspelling if still in the editor.
+            RunCheck();
+        }
+        catch (Exception ex)
+        {
+            ShowError("Remove from dictionary failed", ex.Message);
+        }
+    }
+
+    private void UnignoreWordButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine is null) return;
+        var word = IgnoredWordsList.SelectedItem as string;
+        if (string.IsNullOrEmpty(word)) return;
+
+        try
+        {
+            _engine.UnignoreWord(word);
+            RefreshLexiconLists();
+            SetStatus($"Unignored “{word}”. Re-checking…", CountFromList());
+            // Re-check so the word can reappear as a misspelling if still in the editor.
+            RunCheck();
+        }
+        catch (Exception ex)
+        {
+            ShowError("Unignore failed", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Pull live added/ignored words from the engine into the management ListViews.
+    /// Safe when engine is null (clears lists, disables actions). Does not throw to UI.
+    /// </summary>
+    private void RefreshLexiconLists()
+    {
+        if (AddedWordsList is null || IgnoredWordsList is null)
+            return;
+
+        if (_engine is null)
+        {
+            AddedWordsList.ItemsSource = null;
+            IgnoredWordsList.ItemsSource = null;
+            if (AddedWordsHeader is not null)
+                AddedWordsHeader.Text = "Dictionary (engine offline)";
+            if (IgnoredWordsHeader is not null)
+                IgnoredWordsHeader.Text = "Ignored (engine offline)";
+            if (RemoveWordButton is not null)
+                RemoveWordButton.IsEnabled = false;
+            if (UnignoreWordButton is not null)
+                UnignoreWordButton.IsEnabled = false;
+            return;
+        }
+
+        try
+        {
+            var added = _engine.ListAddedWords();
+            var ignored = _engine.ListIgnoredWords();
+
+            AddedWordsList.ItemsSource = added;
+            IgnoredWordsList.ItemsSource = ignored;
+
+            if (AddedWordsHeader is not null)
+            {
+                AddedWordsHeader.Text = added.Count == 0
+                    ? "Dictionary (empty)"
+                    : $"Dictionary ({added.Count})";
+            }
+            if (IgnoredWordsHeader is not null)
+            {
+                IgnoredWordsHeader.Text = ignored.Count == 0
+                    ? "Ignored (empty)"
+                    : $"Ignored ({ignored.Count})";
+            }
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: leave previous items if any; surface message.
+            CrashLog.Write("RefreshLexiconLists failed:");
+            CrashLog.Write(ex);
+            if (AddedWordsHeader is not null)
+                AddedWordsHeader.Text = "Dictionary (refresh failed)";
+            if (IgnoredWordsHeader is not null)
+                IgnoredWordsHeader.Text = "Ignored (refresh failed)";
+        }
+
+        UpdateLexiconActionButtons();
+    }
+
+    private void UpdateLexiconActionButtons()
+    {
+        bool engineOk = _engine is not null;
+        if (RemoveWordButton is not null)
+            RemoveWordButton.IsEnabled = engineOk && AddedWordsList?.SelectedItem is string;
+        if (UnignoreWordButton is not null)
+            UnignoreWordButton.IsEnabled = engineOk && IgnoredWordsList?.SelectedItem is string;
     }
 
     private void UpdateActionButtons()
