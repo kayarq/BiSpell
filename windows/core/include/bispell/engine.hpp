@@ -190,6 +190,49 @@ public:
         }
     }
 
+    void unignore_word(std::string_view word) {
+        require();
+        if (bispell_engine_unignore_word(eng_, std::string(word).c_str()) != 0) {
+            throw EngineError(bispell_last_error());
+        }
+    }
+
+    std::vector<std::string> list_added_words() const {
+        require();
+        char** list = nullptr;
+        size_t count = 0;
+        if (bispell_engine_list_added_words(eng_, &list, &count) != 0) {
+            throw EngineError(bispell_last_error());
+        }
+        std::vector<std::string> out;
+        out.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            if (list && list[i]) {
+                out.emplace_back(list[i]);
+            }
+        }
+        bispell_string_list_free(list, count);
+        return out;
+    }
+
+    std::vector<std::string> list_ignored_words() const {
+        require();
+        char** list = nullptr;
+        size_t count = 0;
+        if (bispell_engine_list_ignored_words(eng_, &list, &count) != 0) {
+            throw EngineError(bispell_last_error());
+        }
+        std::vector<std::string> out;
+        out.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            if (list && list[i]) {
+                out.emplace_back(list[i]);
+            }
+        }
+        bispell_string_list_free(list, count);
+        return out;
+    }
+
     void update_settings(const EngineSettings& settings) {
         require();
         auto cs = settings.to_c();

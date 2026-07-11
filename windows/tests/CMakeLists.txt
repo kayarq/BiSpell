@@ -55,6 +55,7 @@ bispell_add_test(test_dictionary test_dictionary.cpp)
 bispell_add_test(test_language_tagger test_language_tagger.cpp)
 bispell_add_test(test_lexicon test_lexicon.cpp)
 bispell_add_test(test_spell_engine test_spell_engine.cpp)
+bispell_add_test(test_c_api_lexicon test_c_api_lexicon.cpp)
 
 # Aggregate target used by the plan acceptance command line.
 add_custom_target(bispell_core_tests
@@ -65,4 +66,5 @@ add_custom_target(bispell_core_tests
         test_language_tagger
         test_lexicon
         test_spell_engine
+        test_c_api_lexicon
 )

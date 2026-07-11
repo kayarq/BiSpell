@@ -1,12 +1,14 @@
 #include "bispell/c_api.h"
 #include "bispell/spell_engine.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <new>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -91,6 +93,36 @@ bispell_check_result* make_check_result(const bispell::SpellCheckResult& r) {
         }
     }
     return out;
+}
+
+/// Copy a set of words into a sorted malloc'd C string list (suggestions style).
+/// Empty set → *out_list=NULL, *out_count=0, return 0.
+int export_sorted_string_list(const std::unordered_set<std::string>& words,
+                              char*** out_list,
+                              size_t* out_count) {
+    *out_list = nullptr;
+    *out_count = 0;
+    if (words.empty()) {
+        return 0;
+    }
+    std::vector<std::string> sorted(words.begin(), words.end());
+    std::sort(sorted.begin(), sorted.end());
+    char** arr = static_cast<char**>(std::calloc(sorted.size(), sizeof(char*)));
+    if (!arr) {
+        set_error("out of memory");
+        return 2;
+    }
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        arr[i] = dup_cstr(sorted[i]);
+        if (!arr[i]) {
+            bispell_string_list_free(arr, i);
+            set_error("out of memory");
+            return 2;
+        }
+    }
+    *out_list = arr;
+    *out_count = sorted.size();
+    return 0;
 }
 
 int check_impl(bispell_engine* engine,
@@ -304,6 +336,52 @@ int bispell_engine_remove_from_dictionary(bispell_engine* engine, const char* wo
     }
     reinterpret_cast<EngineImpl*>(engine)->engine->remove_from_dictionary(word);
     return 0;
+}
+
+int bispell_engine_unignore_word(bispell_engine* engine, const char* word) {
+    clear_error();
+    if (!engine || !word) {
+        set_error("null argument");
+        return 1;
+    }
+    reinterpret_cast<EngineImpl*>(engine)->engine->unignore_word(word);
+    return 0;
+}
+
+int bispell_engine_list_added_words(bispell_engine* engine, char*** out_list, size_t* out_count) {
+    clear_error();
+    if (!engine || !out_list || !out_count) {
+        set_error("null argument");
+        return 1;
+    }
+    *out_list = nullptr;
+    *out_count = 0;
+    auto* impl = reinterpret_cast<EngineImpl*>(engine);
+    try {
+        const auto lex = impl->engine->lexicon();
+        return export_sorted_string_list(lex.added_words, out_list, out_count);
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return 3;
+    }
+}
+
+int bispell_engine_list_ignored_words(bispell_engine* engine, char*** out_list, size_t* out_count) {
+    clear_error();
+    if (!engine || !out_list || !out_count) {
+        set_error("null argument");
+        return 1;
+    }
+    *out_list = nullptr;
+    *out_count = 0;
+    auto* impl = reinterpret_cast<EngineImpl*>(engine);
+    try {
+        const auto lex = impl->engine->lexicon();
+        return export_sorted_string_list(lex.ignored_words, out_list, out_count);
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return 3;
+    }
 }
 
 int bispell_engine_update_settings(bispell_engine* engine, const bispell_settings* settings) {

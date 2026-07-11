@@ -125,6 +125,25 @@ BISPELL_API void bispell_string_list_free(char** list, size_t count);
 BISPELL_API int bispell_engine_add_to_dictionary(bispell_engine* engine, const char* word);
 BISPELL_API int bispell_engine_ignore_word(bispell_engine* engine, const char* word);
 BISPELL_API int bispell_engine_remove_from_dictionary(bispell_engine* engine, const char* word);
+BISPELL_API int bispell_engine_unignore_word(bispell_engine* engine, const char* word);
+
+/**
+ * Live personal-dictionary words (sorted, UTF-8 byte order). On success *out_list
+ * is an array of *out_count malloc'd strings (or NULL when empty); free with
+ * bispell_string_list_free. Empty list → *out_list=NULL, *out_count=0, return 0.
+ */
+BISPELL_API int bispell_engine_list_added_words(bispell_engine* engine,
+                                                char*** out_list,
+                                                size_t* out_count);
+
+/**
+ * Live ignored words (sorted, UTF-8 byte order). Ownership same as list_added_words.
+ * Does not include per-app ignoredInApps entries.
+ */
+BISPELL_API int bispell_engine_list_ignored_words(bispell_engine* engine,
+                                                  char*** out_list,
+                                                  size_t* out_count);
+
 BISPELL_API int bispell_engine_update_settings(bispell_engine* engine,
                                                const bispell_settings* settings);
 
