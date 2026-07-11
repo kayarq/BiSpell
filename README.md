@@ -78,11 +78,11 @@ Requires CMake ≥ 3.20 and a C++17 compiler (g++ / clang++ / MSVC). Optional CI
 You do **not** need Visual Studio or CMake on your PC. CI builds the Windows package on GitHub-hosted runners:
 
 1. Open the repo **[Releases](https://github.com/kayarq/BiSpell/releases)** (or this fork’s Releases).
-2. Download **`BiSpell-*-win-x64.zip`**, unzip, run **`BiSpell.App.exe`**.
-3. Smoke: paste `I recieve mail. merhabaa dünya` → **Check** (or F7) → apply a suggestion.
+2. **Primary:** download **`BiSpell-*-win-x64-setup.exe`** (or **`BiSpell-win-x64-setup.exe`**), run the wizard. Optional checkboxes: desktop shortcut, Start Menu pin guidance, start after install.
+3. **Advanced / portable:** download **`BiSpell-*-win-x64.zip`**, unzip anywhere, run **`Run-BiSpell.cmd`** (or **`BiSpell.App.exe`**).
+4. Smoke: paste `I recieve mail. merhabaa dünya` → **Check** (or F7) → apply a suggestion.
 
 Workflow: [`.github/workflows/windows-release.yml`](.github/workflows/windows-release.yml) (`workflow_dispatch` or tag `v*-windows`).
-
 ### WinUI app — build yourself (optional, needs disk space)
 
 1. VS 2022 + Desktop C++ + Windows App SDK / WinUI + .NET 8.

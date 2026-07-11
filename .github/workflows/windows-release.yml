@@ -1,10 +1,11 @@
 # Build unpackaged WinUI + native DLL on GitHub-hosted Windows runners.
-# Produces a zip release asset so contributors need NOT install VS/CMake on C:.
+# Produces installer setup EXE (primary) + portable zip (secondary).
+# Contributors need NOT install VS/CMake on C:.
 #
-# Pipeline (W3 Mandate B):
-#   build-windows-x64  → zip artifact
-#   smoke-windows-x64  → needs build; extract zip, launch smoke
-#   release-windows-x64 → needs smoke green; attach zip to GitHub Release
+# Pipeline (U2 Mandate B — separate build-installer + explicit CI steps):
+#   build-windows-x64  → zip + Inno setup; upload both
+#   smoke-windows-x64  → needs build; extract zip, launch smoke (primary gate)
+#   release-windows-x64 → needs smoke green; attach setup (primary) + zip (secondary)
 #
 # Trigger: tag v* (e.g. v0.1.4-windows) or manual workflow_dispatch.
 name: windows-release
@@ -21,7 +22,7 @@ on:
         required: true
         default: "0.1.4"
       create_release:
-        description: "Create/update GitHub Release and attach zip"
+        description: "Create/update GitHub Release and attach setup + zip"
         type: boolean
         required: true
         default: true
@@ -36,6 +37,7 @@ jobs:
     outputs:
       package_name: ${{ steps.zip.outputs.package_name }}
       package_version: ${{ steps.zip.outputs.package_version }}
+      setup_name: ${{ steps.installer.outputs.setup_name }}
       release_tag: ${{ steps.rel.outputs.tag }}
       release_title: ${{ steps.rel.outputs.title }}
     steps:
@@ -182,6 +184,85 @@ jobs:
           "package_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-Item "dist/$name.zip" | Format-List Name, Length, FullName
 
+      # Explicit CI steps (Mandate B): install Inno → build-installer.ps1 → assert setup
+      - name: Install Inno Setup (choco)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup -y --no-progress
+          # Refresh PATH for subsequent steps (choco often installs under Program Files)
+          $isccDirs = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6",
+            "${env:ProgramFiles}\Inno Setup 6"
+          )
+          foreach ($d in $isccDirs) {
+            if (Test-Path (Join-Path $d "ISCC.exe")) {
+              echo $d | Out-File -FilePath $env:GITHUB_PATH -Append
+              Write-Host "Added to PATH: $d"
+            }
+          }
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $fallback = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (Test-Path $fallback) {
+              Write-Host "iscc not on PATH yet; build-installer will resolve: $fallback"
+            } else {
+              throw "Inno Setup install finished but ISCC.exe not found"
+            }
+          } else {
+            Write-Host "iscc: $($iscc.Source)"
+            & iscc /? 2>&1 | Select-Object -First 3
+          }
+
+      - name: Build installer (build-installer.ps1)
+        id: installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = "${{ steps.zip.outputs.package_version }}"
+          $source = (Resolve-Path "dist/BiSpell-win-x64").Path
+          $outDir = (Resolve-Path "dist").Path
+          # build-installer.ps1 throws on missing iscc / compile failure / missing EXE
+          # and copies stable BiSpell-win-x64-setup.exe next to the versioned setup.
+          & ./windows/app/scripts/build-installer.ps1 `
+            -SourceDir $source `
+            -Version $ver `
+            -OutDir $outDir
+          $setupName = "BiSpell-$ver-win-x64-setup.exe"
+          $setupPath = Join-Path $outDir $setupName
+          if (-not (Test-Path -LiteralPath $setupPath)) {
+            throw "Setup EXE missing after build-installer: $setupPath"
+          }
+          $stablePath = Join-Path $outDir "BiSpell-win-x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $stablePath)) {
+            Copy-Item -Force -LiteralPath $setupPath -Destination $stablePath
+          }
+          "setup_name=$setupName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Get-Item -LiteralPath $setupPath | Format-List Name, Length, FullName
+          Get-Item -LiteralPath $stablePath | Format-List Name, Length, FullName
+
+      - name: Assert setup EXE present
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setupName = "${{ steps.installer.outputs.setup_name }}"
+          $path = "dist/$setupName"
+          $stable = "dist/BiSpell-win-x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $path)) {
+            throw "FAIL: required setup EXE not found: $path"
+          }
+          $len = (Get-Item -LiteralPath $path).Length
+          if ($len -lt 1MB) {
+            throw "FAIL: setup EXE suspiciously small ($len bytes): $path"
+          }
+          if (-not (Test-Path -LiteralPath $stable)) {
+            throw "FAIL: stable setup alias missing: $stable"
+          }
+          Write-Host "OK: $path ($len bytes)"
+          Write-Host "OK: $stable ($((Get-Item -LiteralPath $stable).Length) bytes)"
+          Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } |
+            Format-Table Name, Length -AutoSize
+
       - name: Resolve release tag
         id: rel
         shell: pwsh
@@ -197,11 +278,13 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "title=$title" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Upload build artifact (zip only — same bytes users download)
+      - name: Upload build artifact (setup + zip)
         uses: actions/upload-artifact@v4
         with:
           name: BiSpell-win-x64
           path: |
+            dist/${{ steps.installer.outputs.setup_name }}
+            dist/BiSpell-win-x64-setup.exe
             dist/BiSpell-win-x64.zip
             dist/${{ steps.zip.outputs.package_name }}.zip
           if-no-files-found: error
@@ -209,7 +292,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Smoke: exercise the packaged zip on a clean windows-latest agent.
-  # Gates release — bad builds never attach as "working".
+  # Primary gate — zip launch remains the green-path requirement.
+  # Setup existence is asserted at build/release; silent-install smoke is optional only.
   # ---------------------------------------------------------------------------
   smoke-windows-x64:
     name: Launch smoke (zip)
@@ -219,7 +303,7 @@ jobs:
       - name: Checkout (smoke script)
         uses: actions/checkout@v4
 
-      - name: Download package zip artifact
+      - name: Download package artifact (setup + zip)
         uses: actions/download-artifact@v4
         with:
           name: BiSpell-win-x64
@@ -231,6 +315,10 @@ jobs:
           Get-ChildItem -Recurse dist | Format-Table Name, Length, FullName -AutoSize
           if (-not (Test-Path "dist/BiSpell-win-x64.zip")) {
             throw "dist/BiSpell-win-x64.zip missing after artifact download"
+          }
+          $setupName = "${{ needs.build-windows-x64.outputs.setup_name }}"
+          if ($setupName -and -not (Test-Path "dist/$setupName")) {
+            Write-Host "WARN: setup not in artifact for inventory (zip smoke still primary): dist/$setupName"
           }
 
       - name: Launch smoke (extract zip, run exe, assert log)
@@ -287,7 +375,7 @@ jobs:
             }
 
   # ---------------------------------------------------------------------------
-  # Release: only after smoke green. Publishes the same zip artifact.
+  # Release: only after zip smoke green. Setup EXE primary; zip secondary.
   # ---------------------------------------------------------------------------
   release-windows-x64:
     name: GitHub Release
@@ -299,20 +387,32 @@ jobs:
       needs.smoke-windows-x64.result == 'success' &&
       (github.event_name == 'push' || inputs.create_release == true)
     steps:
-      - name: Download package zip artifact
+      - name: Download package artifact (setup + zip)
         uses: actions/download-artifact@v4
         with:
           name: BiSpell-win-x64
           path: dist
 
-      - name: Verify release assets
+      - name: Verify release assets (setup required + zip)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $name = "${{ needs.build-windows-x64.outputs.package_name }}"
+          $setupName = "${{ needs.build-windows-x64.outputs.setup_name }}"
+          if (-not $setupName) { throw "setup_name output empty from build job" }
+          $setupPath = "dist/$setupName"
+          if (-not (Test-Path -LiteralPath $setupPath)) {
+            throw "FAIL: setup EXE missing before gh-release: $setupPath"
+          }
+          $setupLen = (Get-Item -LiteralPath $setupPath).Length
+          if ($setupLen -lt 1MB) {
+            throw "FAIL: setup EXE suspiciously small before gh-release ($setupLen bytes): $setupPath"
+          }
+          Write-Host "OK setup: $setupPath ($setupLen bytes)"
           if (-not (Test-Path "dist/BiSpell-win-x64.zip")) { throw "stable zip missing" }
           if (-not (Test-Path "dist/$name.zip")) { throw "versioned zip missing: dist/$name.zip" }
-          Get-ChildItem dist/*.zip | Format-Table Name, Length -AutoSize
+          Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } |
+            Format-Table Name, Length -AutoSize
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -325,24 +425,39 @@ jobs:
           body: |
             ## BiSpell for Windows (MVP)
 
-            Unzip and run **`Run-BiSpell.cmd`** (or `BiSpell.App.exe`). Self-contained Windows App SDK — **no** separate Windows App Runtime install required. No Visual Studio/CMake on your PC.
+            ### Recommended: installer
+
+            1. Download **`BiSpell-*-win-x64-setup.exe`** (or the stable **`BiSpell-win-x64-setup.exe`** alias when attached).
+            2. Run the setup wizard.
+            3. On the tasks page, use the checkboxes as you prefer:
+               - **Desktop shortcut** (optional)
+               - **Start Menu** entry (always created; pin from Start Menu if you want it on the taskbar — Windows does not guarantee automatic taskbar pin)
+               - **Start BiSpell after install** (optional)
+            4. Finish the wizard. Self-contained Windows App SDK — **no** separate runtime install.
+            5. Uninstall keeps `%APPDATA%\BiSpell\` (notes / settings / lexicon).
+
+            ### Advanced / portable (zip)
+
+            Prefer no install? Download the **`.zip`**, extract anywhere, run **`Run-BiSpell.cmd`** (or `BiSpell.App.exe`).
 
             | | |
             |--|--|
             | Arch | **x64** |
             | Package | Unpackaged WinUI 3 + `bispell_core.dll` + TR/EN dictionaries |
             | Data | `%APPDATA%\BiSpell\` |
-            | CI | Build zip → launch smoke (BISPELL_SMOKE=1) → release only if smoke green |
+            | CI | Build zip + Inno setup → zip launch smoke (BISPELL_SMOKE=1) → release only if smoke green |
 
             ### Smoke test
-            1. Run `BiSpell.App.exe`
+            1. Install (or run from zip) and launch BiSpell
             2. Open a note / paste: `I recieve mail. merhabaa dünya`
             3. **Check** (or F7) → select typo → **Apply**
 
             **Includes:** in-app Notes (`%APPDATA%\BiSpell\Notes\`), as-you-type in the note editor.
             **Not included:** system-wide hotkey/UIA, macOS templates/taxonomy.
           files: |
-            dist/BiSpell-win-x64.zip
+            dist/${{ needs.build-windows-x64.outputs.setup_name }}
+            dist/BiSpell-win-x64-setup.exe
             dist/${{ needs.build-windows-x64.outputs.package_name }}.zip
+            dist/BiSpell-win-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

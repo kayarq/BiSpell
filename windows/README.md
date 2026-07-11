@@ -67,16 +67,20 @@ Do not hand-edit blobs under `assets/` as the primary copy.
 
 WinUI cannot be compiled on Linux, and a full Visual Studio install is large. Prefer a **GitHub Actions** package:
 
+| Asset | Role |
+|-------|------|
+| **`BiSpell-*-win-x64-setup.exe`** (or **`BiSpell-win-x64-setup.exe`**) | **Primary** — Inno Setup wizard; optional desktop shortcut, Start Menu entry + pin guidance, start after install |
+| **`BiSpell-*-win-x64.zip`** (or **`BiSpell-win-x64.zip`**) | **Advanced / portable** — unzip anywhere; run `Run-BiSpell.cmd` or `BiSpell.App.exe` |
+
 | Step | Action |
 |------|--------|
-| 1 | Download `BiSpell-*-win-x64.zip` from the repo **Releases** |
-| 2 | Unzip anywhere |
-| 3 | Run `BiSpell.App.exe` |
+| 1 | Download the **setup EXE** from the repo **Releases** (recommended) |
+| 2 | Run the wizard; choose optional shortcuts / start-after-install |
+| 3 | Or (portable) download the **zip**, unzip, run `BiSpell.App.exe` |
 
 CI workflow: [`.github/workflows/windows-release.yml`](../.github/workflows/windows-release.yml)  
 Manual: **Actions → windows-release → Run workflow** (needs push access to the fork).  
-Local equivalent (Windows only): `windows/app/scripts/package-release.ps1`.
-
+Local equivalent (Windows only): `windows/app/scripts/package-release.ps1` (zip always; setup when Inno Setup / `iscc` is installed).
 ---
 
 ## Build
@@ -247,7 +251,7 @@ Collapsible expander **Personal dictionary** (collapsed by default).
 
 - **X** / Alt+F4 → full quit: persist settings + dirty note → dispose runtime resources → `Environment.Exit(0)`.
 - **No system tray** and **no hide-to-tray** — process does not stay resident after close.
-- Unsigned release zips may still show SmartScreen / Defender prompts; downloading from the fork **Releases** page is recommended.
+- Unsigned setup EXEs / portable zips may still show SmartScreen / Defender prompts; downloading from the fork **Releases** page is recommended.
 
 ### Keyboard
 
@@ -297,7 +301,7 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units**.
 
-**Binary smoke:** WinUI app build/F5 cannot run on the Linux orchestrator or GHA `windows-core`. On a Windows host: `build-native.ps1` → F5. Or download a **windows-release** zip.
+**Binary smoke:** WinUI app build/F5 cannot run on the Linux orchestrator or GHA `windows-core`. On a Windows host: `build-native.ps1` → F5. Or download a **windows-release** setup EXE (primary) or zip (portable).
 
 See [`docs/WINDOWS.md`](../docs/WINDOWS.md) for MVP vs non-goals, fork notes, and the full build matrix.
 

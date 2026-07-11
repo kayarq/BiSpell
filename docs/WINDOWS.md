@@ -218,7 +218,7 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 
 - Closing the main window (**X** / Alt+F4) always **fully quits**: persist settings + dirty note → dispose debouncer / popup / engine → `Environment.Exit(0)`.
 - **No system tray** / notification-area icon and **no hide-to-tray** — no orphan process after close.
-- Unsigned unpackaged zip may still prompt SmartScreen / Defender; dropping tray reduces ambient shell hooks that can raise noise. Prefer downloading from the fork **Releases** page.
+- Unsigned setup / unpackaged zip may still prompt SmartScreen / Defender; dropping tray reduces ambient shell hooks that can raise noise. Prefer downloading the **setup EXE** (or zip) from the fork **Releases** page.
 
 ### Notes MVP (Phase 5)
 
@@ -266,7 +266,18 @@ Empty notes folder stays empty (click **New** to create a note). The product nam
 | Out-of-app hotkey / UIA / clipboard utility | ❌ **Removed** (editor-only product) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
-| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.2.1) |
+| Windows release **installer** (`*-setup.exe`) + portable zip + smoke | ✅ `.github/workflows/windows-release.yml` — setup primary; zip secondary; zip launch smoke gates release |
 | macOS Swift product | ✅ Unchanged |
 
-**Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK.
+### Release packaging (installer + zip)
+
+| Asset | Status | Notes |
+|-------|--------|--------|
+| **`BiSpell-{ver}-win-x64-setup.exe`** | ✅ Primary release asset | Inno Setup 6 (`windows/installer/BiSpell.iss` via `build-installer.ps1`). Wizard: optional desktop shortcut, Start Menu shortcut, start-after-install checkbox; pin-to-taskbar is user guidance only (not guaranteed by the installer). |
+| **`BiSpell-win-x64-setup.exe`** | ✅ Stable alias | Same bytes as the versioned setup; written by `build-installer.ps1` for CI/docs convenience. |
+| **`BiSpell-{ver}-win-x64.zip`** / **`BiSpell-win-x64.zip`** | ✅ Secondary / portable | Unpackaged tree; extract and run `Run-BiSpell.cmd` or `BiSpell.App.exe`. |
+| CI gate | ✅ Zip launch smoke | `smoke-launch.ps1` on the zip; release job re-asserts setup exists and size &gt; 1MB before `gh-release`. |
+
+Local: `windows/app/scripts/package-release.ps1` always builds the zip; builds the setup when Inno (`iscc`) is available (or `-RequireInstaller`).
+
+**Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK. Prefer a prebuilt **setup EXE** from Releases when you do not want VS on the machine.
