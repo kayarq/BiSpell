@@ -104,7 +104,7 @@
                         <CheckBox x:Name="ClipboardReplaceCheck" Content="Clipboard replace"/>
                     </StackPanel>
                     <TextBlock x:Name="HotkeyBindingCaption"
-                               Text="Global hotkey: Ctrl+Alt+. (registration in a later unit; setting only for now)"
+                               Text="Global hotkey: Ctrl+Alt+. (fallback Win+Shift+.) — registers at launch when enabled"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Opacity="0.65"
                                TextWrapping="Wrap"/>

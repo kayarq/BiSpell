@@ -16,10 +16,14 @@ public sealed class TrayIconService : IDisposable
     private const int WmLButtonDblClk = 0x0203;
     private const int WmRButtonUp = 0x0205;
     private const int NimAdd = 0x00000000;
+    private const int NimModify = 0x00000001;
     private const int NimDelete = 0x00000002;
     private const int NifMessage = 0x00000001;
     private const int NifIcon = 0x00000002;
     private const int NifTip = 0x00000004;
+    private const int NifInfo = 0x00000010;
+    /// <summary>NIIF_INFO — standard info balloon icon.</summary>
+    private const int NiifInfo = 0x00000001;
     private const int IdShow = 1001;
     private const int IdQuit = 1002;
 
@@ -64,12 +68,77 @@ public sealed class TrayIconService : IDisposable
         _added = true;
     }
 
+    /// <summary>
+    /// Show a notification-area balloon (NIF_INFO / NIM_MODIFY). Best-effort:
+    /// Focus Assist / OS policy may suppress balloons — tip is still updated.
+    /// Never throws.
+    /// </summary>
     public void ShowBalloon(string title, string text, int timeoutMs = 2500)
     {
-        // Optional; balloons need NIF_INFO — skip for minimal tray.
-        _ = title;
-        _ = text;
-        _ = timeoutMs;
+        if (_disposed || !_added || _hwnd == IntPtr.Zero)
+            return;
+
+        try
+        {
+            string safeTitle = Truncate(title ?? "BiSpell", 63);
+            string safeText = Truncate(text ?? string.Empty, 255);
+            // Keep tip in sync so hover still shows last result if balloon is blocked.
+            string tip = Truncate(
+                string.IsNullOrEmpty(safeText) ? "BiSpell" : $"BiSpell — {safeText}",
+                127);
+
+            var data = new NotifyIconData
+            {
+                cbSize = (uint)Marshal.SizeOf<NotifyIconData>(),
+                hWnd = _hwnd,
+                uID = 1,
+                uFlags = NifMessage | NifIcon | NifTip | NifInfo,
+                uCallbackMessage = WmTray,
+                hIcon = _hIcon,
+                szTip = tip,
+                szInfo = safeText,
+                uTimeoutOrVersion = (uint)Math.Clamp(timeoutMs, 500, 30000),
+                szInfoTitle = safeTitle,
+                dwInfoFlags = NiifInfo,
+            };
+
+            if (!Shell_NotifyIcon(NimModify, ref data))
+            {
+                // Fallback: tip-only update (no balloon).
+                data.uFlags = NifMessage | NifIcon | NifTip;
+                data.szInfo = string.Empty;
+                data.szInfoTitle = string.Empty;
+                data.dwInfoFlags = 0;
+                Shell_NotifyIcon(NimModify, ref data);
+            }
+        }
+        catch
+        {
+            // Balloon is feedback only — never fail callers.
+        }
+    }
+
+    /// <summary>Update the tray tooltip only (no balloon). Never throws.</summary>
+    public void SetTip(string tip)
+    {
+        if (_disposed || !_added || _hwnd == IntPtr.Zero)
+            return;
+
+        try
+        {
+            var data = BuildNotifyData(Truncate(tip ?? "BiSpell", 127));
+            Shell_NotifyIcon(NimModify, ref data);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private static string Truncate(string value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxChars ? value : value.Substring(0, maxChars);
     }
 
     private NotifyIconData BuildNotifyData(string tip)
@@ -83,6 +152,10 @@ public sealed class TrayIconService : IDisposable
             uCallbackMessage = WmTray,
             hIcon = _hIcon,
             szTip = tip ?? "BiSpell",
+            szInfo = string.Empty,
+            uTimeoutOrVersion = 0,
+            szInfoTitle = string.Empty,
+            dwInfoFlags = 0,
         };
         return data;
     }
@@ -166,6 +239,10 @@ public sealed class TrayIconService : IDisposable
         public IntPtr hIconSm;
     }
 
+    /// <summary>
+    /// NOTIFYICONDATAW with balloon fields (Vista+ layout without guidItem/hBalloonIcon).
+    /// cbSize is set to sizeof(this) so Shell_NotifyIcon accepts NIF_INFO.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct NotifyIconData
     {
@@ -177,6 +254,15 @@ public sealed class TrayIconService : IDisposable
         public IntPtr hIcon;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
         public string szTip;
+        public uint dwState;
+        public uint dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string szInfo;
+        /// <summary>uTimeout (balloon) or uVersion depending on message.</summary>
+        public uint uTimeoutOrVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string szInfoTitle;
+        public uint dwInfoFlags;
     }
 
     [StructLayout(LayoutKind.Sequential)]

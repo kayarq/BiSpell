@@ -1,6 +1,7 @@
 using BiSpell.Interop;
 using BiSpell.Models;
 using BiSpell.Services;
+using BiSpell.Utilities;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -22,7 +23,12 @@ namespace BiSpell;
 /// ToggleButton.IsChecked assign failure in v0.1.3). Exposes enable / TR / EN /
 /// maxSuggestions / minWordLength plus shell-only globalHotkeyEnabled /
 /// clipboardReplaceEnabled (not native ABI). Path hint under the card title. No debounce
-/// UI. Hotkey registration is owned by P2-GLUE — this unit only load/save toggles.
+/// UI.
+///
+/// Clipboard utility (P2-GLUE): <see cref="HandleClipboardUtilityHotkey"/> is invoked
+/// from App on the UI dispatcher when the global hotkey fires. Uses this window's
+/// <see cref="BispellEngine"/> (TryInitEngine if needed) — no second engine instance.
+/// Re-entrancy guarded by <c>_utilityBusy</c>. Concurrent F7 + hotkey serialize on UI thread.
 ///
 /// Lexicon panel (P1-LEXUI Mandate A): inline Expander with dual ListViews (Dictionary |
 /// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
@@ -41,6 +47,12 @@ public sealed partial class MainWindow : Window
     private bool _suppressSettingsEvents = true;
     private string? _lexiconPath;
     private bool _settingsHandlersWired;
+
+    /// <summary>Win32 clipboard facade for utility hotkey (CF_UNICODETEXT only).</summary>
+    private readonly Win32ClipboardText _clipboard = new();
+
+    /// <summary>Re-entrancy guard: ignore nested hotkey while a utility run is in progress.</summary>
+    private bool _utilityBusy;
 
     public MainWindow()
     {
@@ -95,6 +107,12 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
     public void PersistSettings() => SaveSettingsFromUi();
+
+    /// <summary>Shell setting: global clipboard-utility hotkey enabled (for App registration).</summary>
+    public bool IsGlobalHotkeyEnabled => _settings.GlobalHotkeyEnabled;
+
+    /// <summary>Shell setting: write fixed text back to clipboard after utility check.</summary>
+    public bool IsClipboardReplaceEnabled => _settings.ClipboardReplaceEnabled;
 
     /// <summary>
     /// Attach Checked/Unchecked/ValueChanged only after InitializeComponent + LoadSettingsIntoUi.
@@ -261,7 +279,7 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Shell-only utility toggles (global hotkey / clipboard replace). Persist only;
     /// do not call <see cref="ApplySettingsToEngine"/> (flags are not in BispellSettings).
-    /// Hotkey register/unregister is P2-GLUE.
+    /// Hotkey register/unregister via <see cref="App.SyncGlobalHotkeyFromSettings"/> (no restart).
     /// </summary>
     private void UtilitySettings_Changed(object sender, RoutedEventArgs e)
     {
@@ -269,10 +287,242 @@ public sealed partial class MainWindow : Window
 
         SaveSettingsFromUi();
 
+        // Register / unregister without process restart when Global hotkey toggles.
+        try
+        {
+            App.Current.SyncGlobalHotkeyFromSettings();
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("UtilitySettings_Changed hotkey sync: " + ex.Message);
+        }
+
         SetStatus(
             $"Utility settings saved (hotkey={(_settings.GlobalHotkeyEnabled ? "on" : "off")}, " +
             $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}).",
             CountFromList());
+    }
+
+    /// <summary>
+    /// Update the caption under the utility checkboxes with the live binding (App calls this).
+    /// </summary>
+    public void UpdateHotkeyBindingCaption(string? bindingDisplay, bool registered, bool smoke)
+    {
+        if (HotkeyBindingCaption is null) return;
+
+        try
+        {
+            if (smoke)
+            {
+                HotkeyBindingCaption.Text =
+                    "Global hotkey: disabled in smoke mode (BISPELL_SMOKE).";
+            }
+            else if (registered && !string.IsNullOrEmpty(bindingDisplay))
+            {
+                HotkeyBindingCaption.Text =
+                    $"Global hotkey: {bindingDisplay} — copy text, press combo, clipboard is checked/fixed.";
+            }
+            else if (!_settings.GlobalHotkeyEnabled)
+            {
+                HotkeyBindingCaption.Text =
+                    "Global hotkey: off (enable checkbox to register Ctrl+Alt+. or fallback).";
+            }
+            else
+            {
+                HotkeyBindingCaption.Text =
+                    "Global hotkey: unavailable (Ctrl+Alt+. and Win+Shift+. both failed — another app may own them).";
+            }
+        }
+        catch
+        {
+            // Caption is cosmetic.
+        }
+    }
+
+    /// <summary>
+    /// Clipboard utility loop (P2-GLUE). Called on the UI dispatcher from App when the
+    /// global hotkey fires. Must not re-enter concurrent runs.
+    /// <list type="number">
+    /// <item>Read clipboard text (Win32 CF_UNICODETEXT).</item>
+    /// <item>Ensure <see cref="_engine"/> via <see cref="TryInitEngine"/> (same engine as F7).</item>
+    /// <item>Check full clipboard text with current settings.</item>
+    /// <item><see cref="ClipboardSpellFix.ApplyTopSuggestions"/>; optionally write clipboard.</item>
+    /// <item>Status + tray balloon feedback; refresh editor / show window per policy.</item>
+    /// </list>
+    /// </summary>
+    public void HandleClipboardUtilityHotkey()
+    {
+        if (_utilityBusy)
+        {
+            CrashLog.Write("clipboard utility: ignored re-entrant hotkey");
+            return;
+        }
+
+        _utilityBusy = true;
+        try
+        {
+            // Refresh model from UI so replace/hotkey flags match checkboxes.
+            try { SaveSettingsFromUi(); } catch { /* keep last _settings */ }
+
+            if (_engine is null)
+            {
+                TryInitEngine();
+                if (_engine is null)
+                {
+                    NotifyUtilityFeedback("Engine not loaded", 0);
+                    return;
+                }
+            }
+
+            if (!_settings.IsEnabled)
+            {
+                NotifyUtilityFeedback("Spell-check disabled", 0);
+                return;
+            }
+
+            string? text = _clipboard.TryGetText();
+            if (string.IsNullOrEmpty(text))
+            {
+                NotifyUtilityFeedback("Clipboard empty or no text", 0);
+                return;
+            }
+
+            ApplySettingsToEngine();
+
+            IReadOnlyList<MisspellingItem> misses;
+            try
+            {
+                misses = _engine.Check(text);
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Write("clipboard utility check failed: " + ex);
+                NotifyUtilityFeedback("Spell check failed", 0);
+                return;
+            }
+
+            int missCount = misses.Count;
+            if (missCount == 0)
+            {
+                // No write when clean.
+                RefreshEditorFromClipboardUtility(text, misses, showWindow: false);
+                NotifyUtilityFeedback("No misspellings", 0);
+                return;
+            }
+
+            ClipboardFixResult fix = ClipboardSpellFix.ApplyTopSuggestions(text, misses);
+
+            bool wroteClipboard = false;
+            if (_settings.ClipboardReplaceEnabled && fix.ReplacementsApplied > 0)
+            {
+                wroteClipboard = _clipboard.TrySetText(fix.FixedText);
+                if (!wroteClipboard)
+                    CrashLog.Write("clipboard utility: TrySetText failed after fixes");
+            }
+
+            string body;
+            if (!_settings.ClipboardReplaceEnabled)
+            {
+                body = $"{missCount} misspelling(s) — replace off";
+            }
+            else if (fix.ReplacementsApplied > 0 && wroteClipboard)
+            {
+                body = $"Fixed {fix.ReplacementsApplied} word(s), skipped {fix.SkippedNoSuggestion}";
+            }
+            else if (fix.ReplacementsApplied > 0 && !wroteClipboard)
+            {
+                body = $"Fixed {fix.ReplacementsApplied} word(s); clipboard write failed";
+            }
+            else
+            {
+                body = $"{missCount} misspelling(s), no suggestions to apply";
+            }
+
+            // Show window when user needs to review: replace off, partial skip, or write fail.
+            bool needShow =
+                !_settings.ClipboardReplaceEnabled
+                || fix.SkippedNoSuggestion > 0
+                || fix.ReplacementsApplied == 0
+                || (fix.ReplacementsApplied > 0 && !wroteClipboard);
+
+            // Prefer original for review when replace is off; fixed text when we wrote/replaced.
+            string editorText =
+                _settings.ClipboardReplaceEnabled && fix.ReplacementsApplied > 0
+                    ? fix.FixedText
+                    : text;
+
+            RefreshEditorFromClipboardUtility(editorText, misses, showWindow: needShow);
+            NotifyUtilityFeedback(body, missCount);
+
+            // When we wrote fixed text, re-check editor so list matches clipboard.
+            if (wroteClipboard && fix.ReplacementsApplied > 0)
+            {
+                try { RunCheck(); }
+                catch { /* best-effort */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("HandleClipboardUtilityHotkey: " + ex);
+            try { NotifyUtilityFeedback("Clipboard utility failed", 0); } catch { /* ignore */ }
+        }
+        finally
+        {
+            _utilityBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Put clipboard (or fixed) text into the editor and populate misspellings.
+    /// Shows the main window when <paramref name="showWindow"/> is true; otherwise
+    /// refreshes quietly if the window is already open.
+    /// </summary>
+    private void RefreshEditorFromClipboardUtility(
+        string text,
+        IReadOnlyList<MisspellingItem> misses,
+        bool showWindow)
+    {
+        try
+        {
+            if (EditorBox is not null)
+                EditorBox.Text = text ?? string.Empty;
+
+            if (MisspellingsList is not null)
+                MisspellingsList.ItemsSource = misses;
+
+            if (SuggestionsList is not null)
+                SuggestionsList.ItemsSource = null;
+
+            _selectedMisspelling = null;
+            UpdateActionButtons();
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("RefreshEditorFromClipboardUtility: " + ex.Message);
+        }
+
+        if (showWindow)
+        {
+            try { App.Current.ShowMainWindow(); }
+            catch { /* ignore */ }
+        }
+    }
+
+    private void NotifyUtilityFeedback(string body, int misspellingCount)
+    {
+        try
+        {
+            SetStatus("Clipboard utility: " + body, misspellingCount);
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            App.Current.ShowTrayBalloon("BiSpell", body);
+        }
+        catch { /* ignore */ }
+
+        CrashLog.Write("clipboard utility: " + body);
     }
 
     private void MaxSuggestionsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
