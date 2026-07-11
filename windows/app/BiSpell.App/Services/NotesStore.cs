@@ -26,10 +26,12 @@ public sealed class NoteItem
 /// </summary>
 public sealed class NotesStore
 {
-    public const string DefaultSampleBody =
-        "Welcome to BiSpell Notes\n\n" +
-        "Type or paste here. Spelling is checked as you type (or press F7).\n" +
-        "Example: I recieve mail today. merhabaa dünya.\n";
+    /// <summary>
+    /// Optional help text for a new note the user can create — never auto-inserted
+    /// into an empty notes folder (user may keep the list empty).
+    /// </summary>
+    public const string OptionalHelpBody =
+        "Type or paste here. Spelling is checked as you type (or press F7).\n";
 
     private readonly string _directory;
 
@@ -41,8 +43,11 @@ public sealed class NotesStore
 
     public string DirectoryPath => _directory;
 
-    /// <summary>List notes newest-first. Creates a sample note if the folder is empty.</summary>
-    public IReadOnlyList<NoteItem> ListNotes(bool ensureSampleIfEmpty = true)
+    /// <summary>
+    /// List notes newest-first. Never auto-creates a welcome/sample note —
+    /// empty folder stays empty (use New in the UI).
+    /// </summary>
+    public IReadOnlyList<NoteItem> ListNotes()
     {
         var list = new List<NoteItem>();
         try
@@ -65,19 +70,6 @@ public sealed class NotesStore
         catch
         {
             return list;
-        }
-
-        if (list.Count == 0 && ensureSampleIfEmpty)
-        {
-            try
-            {
-                var sample = CreateNote(DefaultSampleBody);
-                list.Add(sample);
-            }
-            catch
-            {
-                // Leave empty; UI can still create notes.
-            }
         }
 
         list.Sort((a, b) => b.LastWriteUtc.CompareTo(a.LastWriteUtc));

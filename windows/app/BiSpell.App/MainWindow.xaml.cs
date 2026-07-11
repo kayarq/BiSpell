@@ -473,7 +473,8 @@ public sealed partial class MainWindow : Window
 
     private void RefreshNotesList(string? selectPath)
     {
-        var notes = _notesStore.ListNotes(ensureSampleIfEmpty: true);
+        // Never force a welcome note — empty Notes folder stays empty.
+        var notes = _notesStore.ListNotes();
         _suppressNotesSelection = true;
         try
         {
@@ -482,11 +483,18 @@ public sealed partial class MainWindow : Window
 
             NoteItem? pick = null;
             if (!string.IsNullOrEmpty(selectPath))
+            {
                 pick = notes.FirstOrDefault(n =>
                     string.Equals(n.FilePath, selectPath, StringComparison.OrdinalIgnoreCase));
-            pick ??= notes.FirstOrDefault();
+            }
+            else if (notes.Count > 0)
+            {
+                // Startup / refresh: select newest only when notes exist.
+                pick = notes.FirstOrDefault();
+            }
+            // notes.Count == 0 → pick stays null (empty tray, empty editor).
 
-            if (NotesList is not null && pick is not null)
+            if (NotesList is not null)
                 NotesList.SelectedItem = pick;
 
             if (pick is not null)
@@ -497,6 +505,17 @@ public sealed partial class MainWindow : Window
                 SetEditorTextProgrammatic(string.Empty);
                 _noteDirty = false;
                 UpdateNoteChrome();
+                // Clear spell UI when no note is open.
+                try
+                {
+                    _suggestionPopup?.Hide();
+                    if (MisspellingsList is not null)
+                        MisspellingsList.ItemsSource = null;
+                    if (SuggestionsList is not null)
+                        SuggestionsList.ItemsSource = null;
+                }
+                catch { /* ignore */ }
+                SetStatus("No notes yet. Click New to start writing.", 0);
             }
         }
         finally
@@ -510,6 +529,9 @@ public sealed partial class MainWindow : Window
     private void LoadNoteIntoEditor(NoteItem note, bool markClean)
     {
         _activeNote = note;
+        // Opening a note must not flash as-you-type popup on load (including brand words in titles).
+        try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+        try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
         string body;
         try { body = _notesStore.ReadBody(note.FilePath); }
         catch (Exception ex)
@@ -522,9 +544,8 @@ public sealed partial class MainWindow : Window
         _noteDirty = !markClean;
         UpdateNoteChrome();
         UpdateNoteActionButtons();
-
-        // Soft quiet recheck after load (list only).
-        try { ScheduleAsYouTypeCheck(wantPopup: false); } catch { /* ignore */ }
+        // Do not auto-recheck on open — avoids popup flash / false hits on brand words.
+        // User can F7 or keep typing (as-you-type) when ready.
     }
 
     private void SetEditorTextProgrammatic(string text)
@@ -665,7 +686,7 @@ public sealed partial class MainWindow : Window
             _suppressNotesSelection = true;
             try
             {
-                var notes = _notesStore.ListNotes(ensureSampleIfEmpty: false);
+                var notes = _notesStore.ListNotes();
                 if (NotesList is not null)
                 {
                     NotesList.ItemsSource = notes;
@@ -737,6 +758,8 @@ public sealed partial class MainWindow : Window
             _engine?.Dispose();
             _engine = BispellEngine.Create(dictDir, _lexiconPath, settings);
             ErrorBar.IsOpen = false;
+            // Product / app tokens are not misspellings (avoids popup on "BiSpell" in titles or sample text).
+            EnsureBrandLexiconWords(_engine);
             RefreshLexiconLists();
 
             var settingsHint = AppPaths.SettingsPath;
@@ -778,6 +801,25 @@ public sealed partial class MainWindow : Window
             ShowError("Unexpected startup error", ex.Message);
             SetStatus("Engine not loaded — unexpected error.", 0);
             RefreshLexiconLists();
+        }
+    }
+
+    /// <summary>
+    /// Ensure product brand tokens are in the personal dictionary so they are never
+    /// flagged (e.g. title "BiSpell" or note text mentioning the app).
+    /// Idempotent: AddToDictionary is a no-op if already present.
+    /// </summary>
+    private static void EnsureBrandLexiconWords(BispellEngine engine)
+    {
+        // Known false positives from product chrome / help copy.
+        string[] brand = { "BiSpell", "bispell", "BiSpellApp" };
+        foreach (var w in brand)
+        {
+            try { engine.AddToDictionary(w); }
+            catch (Exception ex)
+            {
+                CrashLog.Write($"EnsureBrandLexiconWords({w}): {ex.Message}");
+            }
         }
     }
 
