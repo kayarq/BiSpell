@@ -15,12 +15,14 @@ namespace BiSpell;
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
 ///
-/// Settings card (P1-SETTINGS Mandate B + W1): XAML holds structure only (no IsChecked /
-/// Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox state + handlers
-/// are applied in the ctor after InitializeComponent and LoadSettingsIntoUi so handlers
-/// never run mid-tree construction (root cause of ToggleButton.IsChecked assign failure
-/// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength; path hint under
-/// the card title. No debounce UI.
+/// Settings card (P1-SETTINGS Mandate B + W1 + P2-SETTINGS): XAML holds structure only
+/// (no IsChecked / Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox
+/// state + handlers are applied in the ctor after InitializeComponent and
+/// LoadSettingsIntoUi so handlers never run mid-tree construction (root cause of
+/// ToggleButton.IsChecked assign failure in v0.1.3). Exposes enable / TR / EN /
+/// maxSuggestions / minWordLength plus shell-only globalHotkeyEnabled /
+/// clipboardReplaceEnabled (not native ABI). Path hint under the card title. No debounce
+/// UI. Hotkey registration is owned by P2-GLUE — this unit only load/save toggles.
 ///
 /// Lexicon panel (P1-LEXUI Mandate A): inline Expander with dual ListViews (Dictionary |
 /// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
@@ -126,6 +128,19 @@ public sealed partial class MainWindow : Window
         if (MinWordLengthBox is not null)
             MinWordLengthBox.ValueChanged += MinWordLengthBox_ValueChanged;
 
+        // P2-SETTINGS: shell-only utility toggles (no engine ApplySettingsToEngine needed).
+        if (GlobalHotkeyCheck is not null)
+        {
+            GlobalHotkeyCheck.Checked += UtilitySettings_Changed;
+            GlobalHotkeyCheck.Unchecked += UtilitySettings_Changed;
+        }
+
+        if (ClipboardReplaceCheck is not null)
+        {
+            ClipboardReplaceCheck.Checked += UtilitySettings_Changed;
+            ClipboardReplaceCheck.Unchecked += UtilitySettings_Changed;
+        }
+
         _settingsHandlersWired = true;
     }
 
@@ -146,6 +161,12 @@ public sealed partial class MainWindow : Window
                 MaxSuggestionsBox.Value = Math.Clamp(_settings.MaxSuggestions, 1, 20);
             if (MinWordLengthBox is not null)
                 MinWordLengthBox.Value = Math.Clamp(_settings.MinWordLength, 1, 10);
+
+            // Shell-only utility flags (P2-SETTINGS); not pushed to native BispellSettings.
+            if (GlobalHotkeyCheck is not null)
+                GlobalHotkeyCheck.IsChecked = (bool?)_settings.GlobalHotkeyEnabled;
+            if (ClipboardReplaceCheck is not null)
+                ClipboardReplaceCheck.IsChecked = (bool?)_settings.ClipboardReplaceEnabled;
 
             // Path hint: concrete settings.json location when AppData is available.
             if (SettingsPathHint is not null)
@@ -186,6 +207,11 @@ public sealed partial class MainWindow : Window
                 ? 2
                 : (int)Math.Clamp(MinWordLengthBox.Value, 1, 10);
         }
+
+        if (GlobalHotkeyCheck is not null)
+            _settings.GlobalHotkeyEnabled = GlobalHotkeyCheck.IsChecked == true;
+        if (ClipboardReplaceCheck is not null)
+            _settings.ClipboardReplaceEnabled = ClipboardReplaceCheck.IsChecked == true;
 
         _settings.Normalize();
         _settingsStore.Save(_settings);
@@ -229,6 +255,23 @@ public sealed partial class MainWindow : Window
         string state = _settings.IsEnabled ? "enabled" : "disabled";
         SetStatus(
             $"Settings saved ({state}; TR={_settings.TurkishEnabled}, EN={_settings.EnglishEnabled}, max={_settings.MaxSuggestions}, minLen={_settings.MinWordLength}). Press F7 to re-check.",
+            CountFromList());
+    }
+
+    /// <summary>
+    /// Shell-only utility toggles (global hotkey / clipboard replace). Persist only;
+    /// do not call <see cref="ApplySettingsToEngine"/> (flags are not in BispellSettings).
+    /// Hotkey register/unregister is P2-GLUE.
+    /// </summary>
+    private void UtilitySettings_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSettingsEvents) return;
+
+        SaveSettingsFromUi();
+
+        SetStatus(
+            $"Utility settings saved (hotkey={(_settings.GlobalHotkeyEnabled ? "on" : "off")}, " +
+            $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}).",
             CountFromList());
     }
 

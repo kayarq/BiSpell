@@ -29,6 +29,22 @@ public sealed class AppUserSettings
     [JsonPropertyName("debounceMilliseconds")]
     public int DebounceMilliseconds { get; set; } = 250;
 
+    /// <summary>
+    /// Shell-only: when true (default), App may register the global clipboard-utility hotkey
+    /// (P2-GLUE). Not part of <see cref="BispellSettings"/> / native ABI.
+    /// JSON: <c>globalHotkeyEnabled</c>. Missing key → default true.
+    /// </summary>
+    [JsonPropertyName("globalHotkeyEnabled")]
+    public bool GlobalHotkeyEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Shell-only: when true (default), clipboard utility may write the best-effort fixed
+    /// text back to the clipboard after check (P2-GLUE). Not part of native ABI.
+    /// JSON: <c>clipboardReplaceEnabled</c>. Missing key → default true.
+    /// </summary>
+    [JsonPropertyName("clipboardReplaceEnabled")]
+    public bool ClipboardReplaceEnabled { get; set; } = true;
+
     public static AppUserSettings CreateDefault() => new();
 
     /// <summary>Clamp values to safe ranges used by the engine UI.</summary>
@@ -44,8 +60,14 @@ public sealed class AppUserSettings
         // Keep at least one language enabled so empty checks are not confusing.
         if (!TurkishEnabled && !EnglishEnabled)
             EnglishEnabled = true;
+
+        // Shell-only bools need no clamp; System.Text.Json missing keys keep CLR defaults (true).
     }
 
+    /// <summary>
+    /// Native engine settings only. Does <b>not</b> include shell utility flags
+    /// (<see cref="GlobalHotkeyEnabled"/>, <see cref="ClipboardReplaceEnabled"/>).
+    /// </summary>
     public BispellSettings ToNative()
     {
         Normalize();
@@ -68,6 +90,8 @@ public sealed class AppUserSettings
         MaxSuggestions = MaxSuggestions,
         MinWordLength = MinWordLength,
         DebounceMilliseconds = DebounceMilliseconds,
+        GlobalHotkeyEnabled = GlobalHotkeyEnabled,
+        ClipboardReplaceEnabled = ClipboardReplaceEnabled,
     };
 }
 

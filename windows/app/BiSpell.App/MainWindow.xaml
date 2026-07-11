@@ -93,6 +93,21 @@
                                        TextWrapping="Wrap"/>
                         </StackPanel>
                     </StackPanel>
+
+                    <!-- Row 3: clipboard utility (shell-only; P2-SETTINGS).
+                         No IsChecked / Checked / Unchecked in XAML (W1). -->
+                    <TextBlock Text="Clipboard utility"
+                               Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Margin="0,4,0,0"/>
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <CheckBox x:Name="GlobalHotkeyCheck" Content="Global hotkey"/>
+                        <CheckBox x:Name="ClipboardReplaceCheck" Content="Clipboard replace"/>
+                    </StackPanel>
+                    <TextBlock x:Name="HotkeyBindingCaption"
+                               Text="Global hotkey: Ctrl+Alt+. (registration in a later unit; setting only for now)"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Opacity="0.65"
+                               TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
         </StackPanel>
