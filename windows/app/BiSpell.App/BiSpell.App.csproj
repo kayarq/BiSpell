@@ -8,8 +8,10 @@
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
-    <!-- WinForms NotifyIcon for notification-area tray (unpackaged WinUI has no native tray). -->
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Do NOT enable UseWindowsForms — it routes App.xaml through WPF WinFX (MC6000).
+         Tray uses pure Win32 Shell_NotifyIcon in TrayIconService. -->
+    <UseWindowsForms>false</UseWindowsForms>
+    <UseWPF>false</UseWPF>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <!-- Unpackaged local dev (F5 without MSIX). See windows/README.md -->

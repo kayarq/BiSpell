@@ -52,6 +52,13 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Verify .NET SDK (prefer 8.x)
+        shell: pwsh
+        run: |
+          dotnet --list-sdks
+          dotnet --version
+          # global.json under windows/app pins 8.x rollForward
+
       - name: Build native bispell_core.dll
         shell: pwsh
         run: |
@@ -64,15 +71,20 @@ jobs:
           $ErrorActionPreference = "Stop"
           $out = "dist/BiSpell-win-x64"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          dotnet publish windows/app/BiSpell.App/BiSpell.App.csproj `
-            -c Release `
-            -r win-x64 `
-            -p:Platform=x64 `
-            -p:WindowsPackageType=None `
-            -p:WindowsAppSDKSelfContained=true `
-            -p:PublishReadyToRun=false `
-            --self-contained true `
-            -o $out
+          Push-Location windows/app
+          try {
+            dotnet publish BiSpell.App/BiSpell.App.csproj `
+              -c Release `
+              -r win-x64 `
+              -p:Platform=x64 `
+              -p:WindowsPackageType=None `
+              -p:WindowsAppSDKSelfContained=true `
+              -p:PublishReadyToRun=false `
+              --self-contained true `
+              -o (Join-Path (Get-Location) "../../$out")
+          } finally {
+            Pop-Location
+          }
           # Ensure native DLL is next to BiSpell.App.exe
           $dllCandidates = @(
             "windows/app/native/x64/bispell_core.dll",
