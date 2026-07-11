@@ -137,7 +137,7 @@
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="services:NoteItem">
                         <StackPanel Padding="4,6" Spacing="2">
-                            <TextBlock Text="{x:Bind Title}" TextWrapping="WrapNoWrap"
+                            <TextBlock Text="{x:Bind Title}" TextWrapping="NoWrap"
                                        TextTrimming="CharacterEllipsis"
                                        FontWeight="SemiBold"/>
                             <TextBlock Text="{x:Bind FileName}" Opacity="0.55" FontSize="11"
