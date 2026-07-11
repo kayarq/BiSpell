@@ -15,10 +15,10 @@ namespace BiSpell;
 /// Startup failure path (W2 Mandate B): log type+message+stack, write
 /// %TEMP%\BiSpell-startup.status fail:…, MessageBox only when not smoke, Environment.Exit(1).
 ///
-/// Phase 2 (P2-GLUE): when <see cref="AppUserSettings.GlobalHotkeyEnabled"/> and not
+/// Phase 2/3 (P2/P3-GLUE): when <see cref="AppUserSettings.GlobalHotkeyEnabled"/> and not
 /// smoke, registers <see cref="GlobalHotkeyService"/>; HotkeyPressed → UI dispatcher →
-/// <see cref="MainWindow.HandleClipboardUtilityHotkey"/>. Settings toggle re-registers
-/// without restart. Smoke (<c>BISPELL_SMOKE=1</c>) never registers.
+/// <see cref="MainWindow.HandleUtilityHotkey"/> (UIA-first + clipboard orchestrator).
+/// Settings toggle re-registers without restart. Smoke (<c>BISPELL_SMOKE=1</c>) never registers.
 /// </summary>
 public partial class App : Application
 {
@@ -168,11 +168,11 @@ public partial class App : Application
             {
                 try
                 {
-                    _window?.HandleClipboardUtilityHotkey();
+                    _window?.HandleUtilityHotkey();
                 }
                 catch (Exception ex)
                 {
-                    CrashLog.Write("HandleClipboardUtilityHotkey: " + ex);
+                    CrashLog.Write("HandleUtilityHotkey: " + ex);
                 }
             });
 

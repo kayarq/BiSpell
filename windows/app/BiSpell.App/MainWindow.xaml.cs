@@ -1,7 +1,6 @@
 using BiSpell.Interop;
 using BiSpell.Models;
 using BiSpell.Services;
-using BiSpell.Utilities;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -25,17 +24,18 @@ namespace BiSpell;
 /// clipboardReplaceEnabled / uiaAssistEnabled (not native ABI). Path hint under the card
 /// title. No debounce UI.
 ///
-/// Clipboard utility (P2-GLUE): <see cref="HandleClipboardUtilityHotkey"/> is invoked
-/// from App on the UI dispatcher when the global hotkey fires. Uses this window's
-/// <see cref="BispellEngine"/> (TryInitEngine if needed) — no second engine instance.
-/// Re-entrancy guarded by <c>_utilityBusy</c>. Concurrent F7 + hotkey serialize on UI thread.
+/// Utility hotkey (P2/P3-GLUE mandate B): App invokes <see cref="HandleUtilityHotkey"/> on
+/// the UI dispatcher. Orchestration lives in <see cref="UtilityHotkeyOrchestrator"/>
+/// (UIA-first when <c>uiaAssistEnabled</c>, else Phase 2 clipboard subroutine). This window
+/// is a thin <see cref="IUtilityHotkeyHost"/>: engine, settings, editor, status/tray only.
+/// No second engine instance. Concurrent F7 + hotkey serialize on the UI thread.
 ///
 /// Lexicon panel (P1-LEXUI Mandate A): inline Expander with dual ListViews (Dictionary |
 /// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
 /// ListIgnoredWords; mutations via RemoveFromDictionary / UnignoreWord. Refresh after
 /// add/ignore/remove/unignore and after engine init. No ignore-in-app editor; no new Window.
 /// </summary>
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 {
     private BispellEngine? _engine;
     private MisspellingItem? _selectedMisspelling;
@@ -48,11 +48,8 @@ public sealed partial class MainWindow : Window
     private string? _lexiconPath;
     private bool _settingsHandlersWired;
 
-    /// <summary>Win32 clipboard facade for utility hotkey (CF_UNICODETEXT only).</summary>
-    private readonly Win32ClipboardText _clipboard = new();
-
-    /// <summary>Re-entrancy guard: ignore nested hotkey while a utility run is in progress.</summary>
-    private bool _utilityBusy;
+    /// <summary>UIA-first + clipboard utility orchestrator (owns re-entrancy + path policy).</summary>
+    private readonly UtilityHotkeyOrchestrator _utilityOrchestrator;
 
     public MainWindow()
     {
@@ -64,6 +61,9 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         CrashLog.Write("MainWindow ctor: InitializeComponent done");
         Title = "BiSpell — Spell Check";
+
+        // P3-GLUE: host = this (engine/settings/UI); orchestrator owns UIA + clipboard IO.
+        _utilityOrchestrator = new UtilityHotkeyOrchestrator(this);
 
         // 2) Drive all boolean / numeric state from code while handlers are still unwired.
         LoadSettingsIntoUi();
@@ -335,7 +335,7 @@ public sealed partial class MainWindow : Window
             else if (registered && !string.IsNullOrEmpty(bindingDisplay))
             {
                 HotkeyBindingCaption.Text =
-                    $"Global hotkey: {bindingDisplay} — copy text, press combo, clipboard is checked/fixed.";
+                    $"Global hotkey: {bindingDisplay} — focus a field (UIA) or copy text, press combo to check/fix.";
             }
             else if (!_settings.GlobalHotkeyEnabled)
             {
@@ -355,144 +355,51 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Clipboard utility loop (P2-GLUE). Called on the UI dispatcher from App when the
-    /// global hotkey fires. Must not re-enter concurrent runs.
-    /// <list type="number">
-    /// <item>Read clipboard text (Win32 CF_UNICODETEXT).</item>
-    /// <item>Ensure <see cref="_engine"/> via <see cref="TryInitEngine"/> (same engine as F7).</item>
-    /// <item>Check full clipboard text with current settings.</item>
-    /// <item><see cref="ClipboardSpellFix.ApplyTopSuggestions"/>; optionally write clipboard.</item>
-    /// <item>Status + tray balloon feedback; refresh editor / show window per policy.</item>
-    /// </list>
+    /// Global utility hotkey entry (P3-GLUE). UI dispatcher only. Delegates to
+    /// <see cref="UtilityHotkeyOrchestrator"/> (UIA-first + clipboard fallback).
     /// </summary>
-    public void HandleClipboardUtilityHotkey()
-    {
-        if (_utilityBusy)
-        {
-            CrashLog.Write("clipboard utility: ignored re-entrant hotkey");
-            return;
-        }
+    public void HandleUtilityHotkey() => _utilityOrchestrator.HandleUtilityHotkey();
 
-        _utilityBusy = true;
+    /// <summary>
+    /// Backward-compatible alias for <see cref="HandleUtilityHotkey"/> (Phase 2 name).
+    /// </summary>
+    public void HandleClipboardUtilityHotkey() => HandleUtilityHotkey();
+
+    // ---- IUtilityHotkeyHost (thin shell for orchestrator) ----
+
+    BispellEngine? IUtilityHotkeyHost.Engine => _engine;
+
+    bool IUtilityHotkeyHost.IsSpellEnabled => _settings.IsEnabled;
+
+    bool IUtilityHotkeyHost.IsUiaAssistEnabled => _settings.UiaAssistEnabled;
+
+    bool IUtilityHotkeyHost.IsClipboardReplaceEnabled => _settings.ClipboardReplaceEnabled;
+
+    void IUtilityHotkeyHost.SaveSettingsFromUi() => SaveSettingsFromUi();
+
+    bool IUtilityHotkeyHost.EnsureEngineReady()
+    {
+        if (_engine is not null)
+            return true;
+        TryInitEngine();
+        return _engine is not null;
+    }
+
+    string? IUtilityHotkeyHost.GetEditorText()
+    {
         try
         {
-            // Refresh model from UI so replace/hotkey flags match checkboxes.
-            try { SaveSettingsFromUi(); } catch { /* keep last _settings */ }
-
-            if (_engine is null)
-            {
-                TryInitEngine();
-                if (_engine is null)
-                {
-                    NotifyUtilityFeedback("Engine not loaded", 0);
-                    return;
-                }
-            }
-
-            if (!_settings.IsEnabled)
-            {
-                NotifyUtilityFeedback("Spell-check disabled", 0);
-                return;
-            }
-
-            string? text = _clipboard.TryGetText();
-            if (string.IsNullOrEmpty(text))
-            {
-                NotifyUtilityFeedback("Clipboard empty or no text", 0);
-                return;
-            }
-
-            ApplySettingsToEngine();
-
-            IReadOnlyList<MisspellingItem> misses;
-            try
-            {
-                misses = _engine.Check(text);
-            }
-            catch (Exception ex)
-            {
-                CrashLog.Write("clipboard utility check failed: " + ex);
-                NotifyUtilityFeedback("Spell check failed", 0);
-                return;
-            }
-
-            int missCount = misses.Count;
-            if (missCount == 0)
-            {
-                // No write when clean.
-                RefreshEditorFromClipboardUtility(text, misses, showWindow: false);
-                NotifyUtilityFeedback("No misspellings", 0);
-                return;
-            }
-
-            ClipboardFixResult fix = ClipboardSpellFix.ApplyTopSuggestions(text, misses);
-
-            bool wroteClipboard = false;
-            if (_settings.ClipboardReplaceEnabled && fix.ReplacementsApplied > 0)
-            {
-                wroteClipboard = _clipboard.TrySetText(fix.FixedText);
-                if (!wroteClipboard)
-                    CrashLog.Write("clipboard utility: TrySetText failed after fixes");
-            }
-
-            string body;
-            if (!_settings.ClipboardReplaceEnabled)
-            {
-                body = $"{missCount} misspelling(s) — replace off";
-            }
-            else if (fix.ReplacementsApplied > 0 && wroteClipboard)
-            {
-                body = $"Fixed {fix.ReplacementsApplied} word(s), skipped {fix.SkippedNoSuggestion}";
-            }
-            else if (fix.ReplacementsApplied > 0 && !wroteClipboard)
-            {
-                body = $"Fixed {fix.ReplacementsApplied} word(s); clipboard write failed";
-            }
-            else
-            {
-                body = $"{missCount} misspelling(s), no suggestions to apply";
-            }
-
-            // Show window when user needs to review: replace off, partial skip, or write fail.
-            bool needShow =
-                !_settings.ClipboardReplaceEnabled
-                || fix.SkippedNoSuggestion > 0
-                || fix.ReplacementsApplied == 0
-                || (fix.ReplacementsApplied > 0 && !wroteClipboard);
-
-            // Prefer original for review when replace is off; fixed text when we wrote/replaced.
-            string editorText =
-                _settings.ClipboardReplaceEnabled && fix.ReplacementsApplied > 0
-                    ? fix.FixedText
-                    : text;
-
-            RefreshEditorFromClipboardUtility(editorText, misses, showWindow: needShow);
-            NotifyUtilityFeedback(body, missCount);
-
-            // When we wrote fixed text, re-check editor so list matches clipboard.
-            if (wroteClipboard && fix.ReplacementsApplied > 0)
-            {
-                try { RunCheck(); }
-                catch { /* best-effort */ }
-            }
+            return EditorBox?.Text;
         }
-        catch (Exception ex)
+        catch
         {
-            CrashLog.Write("HandleClipboardUtilityHotkey: " + ex);
-            try { NotifyUtilityFeedback("Clipboard utility failed", 0); } catch { /* ignore */ }
-        }
-        finally
-        {
-            _utilityBusy = false;
+            return null;
         }
     }
 
-    /// <summary>
-    /// Put clipboard (or fixed) text into the editor and populate misspellings.
-    /// Shows the main window when <paramref name="showWindow"/> is true; otherwise
-    /// refreshes quietly if the window is already open.
-    /// </summary>
-    private void RefreshEditorFromClipboardUtility(
+    void IUtilityHotkeyHost.ApplySettingsToEngine() => ApplySettingsToEngine();
+
+    void IUtilityHotkeyHost.RefreshEditor(
         string text,
         IReadOnlyList<MisspellingItem> misses,
         bool showWindow)
@@ -513,9 +420,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            CrashLog.Write("RefreshEditorFromClipboardUtility: " + ex.Message);
+            CrashLog.Write("RefreshEditor (utility): " + ex.Message);
         }
 
+        // Only after UIA/clipboard write attempts (orchestrator guarantees call order).
         if (showWindow)
         {
             try { App.Current.ShowMainWindow(); }
@@ -523,21 +431,32 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void NotifyUtilityFeedback(string body, int misspellingCount)
+    void IUtilityHotkeyHost.NotifyFeedback(string pathLabel, string body, int misspellingCount)
     {
+        string prefix = string.IsNullOrEmpty(pathLabel) ? "Utility" : $"Utility ({pathLabel})";
+        string status = prefix + ": " + body;
+
         try
         {
-            SetStatus("Clipboard utility: " + body, misspellingCount);
+            SetStatus(status, misspellingCount);
         }
         catch { /* ignore */ }
 
         try
         {
-            App.Current.ShowTrayBalloon("BiSpell", body);
+            // Tray: keep body short; include path when useful.
+            string tray = string.IsNullOrEmpty(pathLabel) ? body : $"[{pathLabel}] {body}";
+            App.Current.ShowTrayBalloon("BiSpell", tray);
         }
         catch { /* ignore */ }
 
-        CrashLog.Write("clipboard utility: " + body);
+        CrashLog.Write("utility: " + status);
+    }
+
+    void IUtilityHotkeyHost.RunEditorRecheck()
+    {
+        try { RunCheck(); }
+        catch { /* best-effort */ }
     }
 
     private void MaxSuggestionsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
