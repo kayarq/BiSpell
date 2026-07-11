@@ -37,6 +37,16 @@ jobs:
         with:
           arch: x64
 
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y
+          }
+          ninja --version
+          cmake --version
+          cl 2>&1 | Select-Object -First 2
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
