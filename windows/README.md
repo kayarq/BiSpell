@@ -178,18 +178,41 @@ Linux CI / orchestrator does **not** build WinUI.
 4. Press **F7** or **Check** → expect `recieve`, `merhabaa` in the misspellings list; status badge shows count.
 5. Select `recieve` → suggestions (ideally include `receive`).
 6. **Enter** or **double-click** a suggestion → text updated at the **UTF-16** range; auto re-check.
-7. **Add to dictionary** / **Ignore** on a nonsense token → re-check no longer flags it.
-8. Toggle **Spell-check enabled** / TR/EN / **Max suggestions**; re-check. Quit and relaunch → settings still applied.
+7. **Add to dictionary** / **Ignore** on a nonsense token → re-check no longer flags it; word appears in the lexicon panel (below).
+8. Toggle **Spell-check enabled** / TR/EN / **Max suggestions** / **Min word length**; re-check. Quit and relaunch → settings still applied.
 9. Tray icon: right-click → **Show BiSpell** / **Quit**. Closing the window hides to tray (not exit).
+
+### Settings (Phase 1)
+
+Settings card on the main window (persisted to AppData):
+
+| Control | Effect |
+|---------|--------|
+| **Spell-check enabled** | Master gate for check |
+| **Turkish** / **English** | Language dictionaries |
+| **Max suggestions** | Caps suggestion list (1–20) |
+| **Min word length** | Tokens shorter than this are **skipped** on check (1–10, default 2). Raise to reduce noise on short tokens; lower to include 1-letter words. |
+
+### Lexicon manage UI (Phase 1)
+
+Collapsible expander **Personal dictionary & ignored words** under the check layout (live lists from the engine; not a startup modal — safe for headless smoke).
+
+| List | How words get there | Manage action |
+|------|---------------------|---------------|
+| **Dictionary** | Select a misspelling → **Add to dictionary** | Select row → **Remove selected** → word can flag again on re-check |
+| **Ignored** | Select a misspelling → **Ignore** | Select row → **Unignore selected** → word can flag again on re-check |
+
+Remove / Unignore refresh the lists and re-run check immediately. File-backed lexicon survives relaunch under AppData (below).
 
 ### Persistence (AppData)
 
 | Path | Contents |
 |------|----------|
-| `%APPDATA%\BiSpell\settings.json` | Enable flags, language toggles, `maxSuggestions`, … |
-| `%APPDATA%\BiSpell\user-lexicon.json` | Words added via **Add to dictionary** / ignore list |
+| `%APPDATA%\BiSpell\settings.json` | `isEnabled`, TR/EN, `maxSuggestions`, `minWordLength`, `debounceMilliseconds` |
+| `%APPDATA%\BiSpell\user-lexicon.json` | Personal dictionary (`addedWords`) + ignore list (`ignoredWords`) |
 
-**Lexicon relaunch check:** Add `BiSpellPersistXYZ` → quit → relaunch → same word no longer flagged.
+- **Settings relaunch:** change Min word length / languages → quit → relaunch → UI and check behavior match.
+- **Lexicon relaunch:** Add `BiSpellPersistXYZ` → quit → relaunch → same word not flagged; JSON lists it under `addedWords`.
 
 Full steps: [`docs/WINDOWS.md`](../docs/WINDOWS.md) → *User data* / *Persistence smoke tests*.
 
@@ -216,6 +239,8 @@ P/Invoke layer: `windows/app/BiSpell.App/Interop/`
 | `BispellEngine.Check` | `bispell_engine_check` + `bispell_check_result_free` |
 | `BispellEngine.Suggestions` | `bispell_engine_suggestions` + `bispell_string_list_free` |
 | `AddToDictionary` / `IgnoreWord` | `bispell_engine_add_to_dictionary` / `ignore_word` |
+| `RemoveFromDictionary` / `UnignoreWord` | `bispell_engine_remove_from_dictionary` / `unignore_word` |
+| `ListAddedWords` / `ListIgnoredWords` | `bispell_engine_list_added_words` / `list_ignored_words` (+ string-list free) |
 | `UpdateSettings` | `bispell_engine_update_settings` |
 | ranges | `utf16_location` / `utf16_length` (C# string indices) |
 

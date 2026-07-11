@@ -51,7 +51,7 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - UserLexicon + file store under `%APPDATA%\BiSpell\`
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
-3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **persistent settings**, **system tray** (show / quit).
+3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage** (remove / unignore), **min word length**, **persistent settings**, **system tray** (show / quit).
 4. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
@@ -163,27 +163,48 @@ swift build -c release
 | `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`). Loaded at startup; saved when toggles change. |
 | `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
 
+Full path examples (per-user profile):
+
+- `%APPDATA%\BiSpell\settings.json`
+- `%APPDATA%\BiSpell\user-lexicon.json`
+
 C++ path helpers: `bispell::paths::default_config_dir()`, `default_settings_path()`, `default_lexicon_path()` (Windows → `%APPDATA%\BiSpell\`; injectable override for tests).
 
-C# mirrors the same locations via `BiSpell.Services.AppPaths` / `SettingsStore`.
+C# mirrors the same locations via `BiSpell.Services.AppPaths` / `SettingsStore`. Status line shows dict / settings / lexicon paths when the engine loads.
+
+### Phase 1 shell features (settings + lexicon manage)
+
+**Min word length** — settings card NumberBox (1–10, default 2). Tokens shorter than this are skipped on check; value is written to `settings.json` as `minWordLength` and applied via `UpdateSettings`.
+
+**Lexicon manage UI** — collapsible expander **Personal dictionary & ignored words** on the main window (inline lists; **no** modal at startup, so GHA `smoke-launch.ps1` / `BISPELL_SMOKE=1` never hangs on a dialog).
+
+| Action | UI | Effect |
+|--------|-----|--------|
+| Add | Misspelling selected → **Add to dictionary** | Word enters personal dict; re-check no longer flags it; appears under **Dictionary** |
+| Ignore | Misspelling selected → **Ignore** | Word enters ignore list; re-check skips it; appears under **Ignored** |
+| **Remove selected** | Select a **Dictionary** row → button | `RemoveFromDictionary`; re-check can flag the word again |
+| **Unignore selected** | Select an **Ignored** row → button | `UnignoreWord`; re-check can flag the word again |
+
+Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a raw disk re-read only. Empty / engine-offline headers keep buttons disabled without crashing.
 
 ### Persistence smoke tests (Windows host)
 
 **Settings across relaunch**
 
 1. Launch BiSpell, note status line shows paths under `%APPDATA%\BiSpell\`.
-2. Uncheck **Turkish** (leave English on), set **Max suggestions** to `3`, optionally uncheck **Spell-check enabled**.
+2. Uncheck **Turkish** (leave English on), set **Max suggestions** to `3`, set **Min word length** to e.g. `4`, optionally uncheck **Spell-check enabled**.
 3. Quit via tray **Quit** (or close then Quit).
-4. Confirm `%APPDATA%\BiSpell\settings.json` contains the chosen values.
-5. Relaunch → UI toggles match; Check with `isEnabled=false` returns no misspellings; with languages restored, max suggestions caps the list.
+4. Confirm `%APPDATA%\BiSpell\settings.json` contains the chosen values (including `minWordLength`).
+5. Relaunch → UI toggles match; Check with `isEnabled=false` returns no misspellings; with languages restored, max suggestions caps the list; short tokens below min length are skipped.
 
 **Lexicon across relaunch**
 
 1. Paste a nonsense token (e.g. `BiSpellPersistXYZ`) and Check → it is flagged.
-2. Select it → **Add to dictionary**.
+2. Select it → **Add to dictionary** (confirm it appears in the Dictionary list).
 3. Quit and relaunch (same user profile).
-4. Paste the same token → Check → **not** flagged.
+4. Paste the same token → Check → **not** flagged; Dictionary list still shows the word.
 5. Confirm `%APPDATA%\BiSpell\user-lexicon.json` lists the word under `addedWords` (or equivalent).
+6. **Remove selected** → re-check → word flagged again; **Ignore** then **Unignore selected** similarly.
 
 ### Tray (notification area)
 
@@ -202,8 +223,10 @@ C# mirrors the same locations via `BiSpell.Services.AppPaths` / `SettingsStore`.
 | C++ core + `ctest` + C ABI | ✅ Linux-verified (`bispell_core_tests`) |
 | C# WinUI 3 shell (check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
 | Settings + tray + AppData | ✅ U5 |
+| Phase 1: min word length + lexicon manage (remove/unignore) | ✅ P1-SETTINGS / P1-LEXUI |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
+| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` |
 | macOS Swift product | ✅ Unchanged |
 | U6 UIA probe | ⬜ Optional post-MVP |
 
