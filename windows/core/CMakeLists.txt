@@ -78,6 +78,9 @@ if(BISPELL_BUILD_SHARED)
     if(MSVC)
         target_compile_options(bispell_core_shared PRIVATE /W4 /permissive- /utf-8)
         target_compile_definitions(bispell_core_shared PRIVATE _CRT_SECURE_NO_WARNINGS)
+        # Static CRT so end users do not need VCRUNTIME140.dll next to the app.
+        set_property(TARGET bispell_core_shared PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     else()
         target_compile_options(bispell_core_shared PRIVATE -Wall -Wextra -Wpedantic)
     endif()

@@ -1,6 +1,7 @@
 using BiSpell.Interop;
 using BiSpell.Models;
 using BiSpell.Services;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -30,7 +31,23 @@ public sealed partial class MainWindow : Window
         Title = "BiSpell — Spell Check";
 
         LoadSettingsIntoUi();
-        TryInitEngine();
+        // Defer native engine load so a missing VC++ runtime / DLL cannot kill the window before paint.
+        try
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                try { TryInitEngine(); }
+                catch (Exception ex)
+                {
+                    CrashLog.Write(ex);
+                    ShowError("Engine init failed", ex.Message);
+                }
+            });
+        }
+        catch
+        {
+            TryInitEngine();
+        }
 
         Closed += (_, _) =>
         {

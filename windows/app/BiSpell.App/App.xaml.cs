@@ -19,11 +19,28 @@ public partial class App : Application
 
     public App()
     {
-        InitializeComponent();
+        try
+        {
+            CrashLog.Write("App ctor: InitializeComponent");
+            InitializeComponent();
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write(ex);
+            CrashLog.MessageBox("BiSpell XAML init failed", ex.Message);
+            throw;
+        }
+
         UnhandledException += (_, e) =>
         {
-            System.Diagnostics.Debug.WriteLine($"Unhandled: {e.Exception}");
-            e.Handled = true;
+            CrashLog.Write("UnhandledException: " + e.Exception);
+            // Keep false so process can terminate visibly; still log to disk.
+            e.Handled = false;
+            try
+            {
+                CrashLog.MessageBox("BiSpell error", e.Exception?.Message ?? "unknown");
+            }
+            catch { /* ignore */ }
         };
     }
 
@@ -34,8 +51,20 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
-        _window.Activate();
+        CrashLog.Write("OnLaunched");
+        try
+        {
+            _window = new MainWindow();
+            CrashLog.Write("MainWindow created");
+            _window.Activate();
+            CrashLog.Write("MainWindow.Activate done");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write(ex);
+            CrashLog.MessageBox("BiSpell window failed", ex.Message);
+            throw;
+        }
 
         try
         {

@@ -28,6 +28,10 @@
     <LangVersion>latest</LangVersion>
     <ApplicationTitle>BiSpell</ApplicationTitle>
     <ApplicationId>com.bispell.windows</ApplicationId>
+    <!-- Custom Program.cs with crash logging -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>true</WindowsAppSdkUndockedRegFreeWinRTInitialize>
   </PropertyGroup>
 
   <ItemGroup>
@@ -75,6 +79,10 @@
           Link="bispell_core.dll"
           CopyToOutputDirectory="PreserveNewest"
           Condition="Exists('..\native\bispell_core.dll') AND !Exists('..\native\$(Platform)\bispell_core.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Run-BiSpell.cmd" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

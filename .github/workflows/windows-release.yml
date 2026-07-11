@@ -14,7 +14,7 @@ on:
       version:
         description: "Release version label (e.g. 0.1.0)"
         required: true
-        default: "0.1.0"
+        default: "0.1.1"
       create_release:
         description: "Create/update GitHub Release and attach zip"
         type: boolean
@@ -93,6 +93,19 @@ jobs:
           $dll = $dllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $dll) { throw "bispell_core.dll missing after native build" }
           Copy-Item -Force $dll (Join-Path $out "bispell_core.dll")
+          # Belt-and-suspenders: ship MSVC CRT next to the app (static /MT preferred; this covers dynamic builds).
+          $crtCandidates = @()
+          if ($env:VCToolsRedistDir) {
+            $crtCandidates += (Join-Path $env:VCToolsRedistDir "x64\Microsoft.VC143.CRT")
+            $crtCandidates += (Join-Path $env:VCToolsRedistDir "x64\Microsoft.VC142.CRT")
+          }
+          foreach ($crt in $crtCandidates) {
+            if (Test-Path $crt) {
+              Write-Host "Copying VC CRT from $crt"
+              Copy-Item -Force (Join-Path $crt "*.dll") $out
+              break
+            }
+          }
           # Dictionaries (csproj should copy; re-stage SoT for safety)
           $dictOut = Join-Path $out "Dictionaries"
           New-Item -ItemType Directory -Force -Path $dictOut | Out-Null
@@ -103,8 +116,9 @@ jobs:
           ==========================================
 
           1. Unzip this folder anywhere (no installer).
-          2. Run BiSpell.App.exe
-          3. Paste text, press Check (or F7), apply suggestions.
+          2. Prefer Run-BiSpell.cmd (shows errors). Or double-click BiSpell.App.exe.
+          3. If nothing appears: open %TEMP%\BiSpell-startup.log
+          4. Paste text, press Check (or F7), apply suggestions.
 
           Data: %APPDATA%\BiSpell\ (settings + personal lexicon)
 
