@@ -22,13 +22,16 @@ BiSpell.App/
   Services/
     AppPaths.cs                 ← %APPDATA%\BiSpell\ paths
     SettingsStore.cs            ← settings.json load/save
+    EditorSpellDebouncer.cs     ← as-you-type debounce (DispatcherQueueTimer)
     TrayIconService.cs          ← WinForms NotifyIcon (show / quit)
     GlobalHotkeyService.cs      ← Win32 RegisterHotKey
     Win32ClipboardText.cs       ← CF_UNICODETEXT read/write
     UiaTextAccess.cs            ← soft-fail ValuePattern probe/read/write
     UtilityHotkeyOrchestrator.cs← UIA-first + clipboard fallback
+  UI/
+    SuggestionPopupController.cs← as-you-type suggestion Popup (Enter/1–5/Esc)
   Models/MisspellingItem.cs
-  MainWindow.xaml(.cs)   ← check / list / suggest / apply / settings / probe
+  MainWindow.xaml(.cs)   ← check / list / suggest / apply / settings / probe / as-you-type
   App.xaml(.cs)          ← tray + hotkey lifecycle
 native/                  ← staged bispell_core.dll
 scripts/                 ← build-native, stage-dictionaries
@@ -39,7 +42,8 @@ scripts/                 ← build-native, stage-dictionaries
 - Status line + misspelling count badge
 - Double-click suggestion (or misspelling) to apply
 - **F7** check; **Enter** apply top/selected suggestion
-- Settings bar: enable, TR/EN, max suggestions → `%APPDATA%\BiSpell\settings.json`
+- **As-you-type** (default on): debounced live check in the editor + suggestion popup (**Enter** / **1–5** / **Esc**)
+- Settings bar: enable, TR/EN, max suggestions, min word length, debounce, as-you-type → `%APPDATA%\BiSpell\settings.json`
 - Tray: Show BiSpell / Quit; close window hides to tray
 
 ## Diagnostic: v0.1.3 `ToggleButton.IsChecked` crash (W1 fix)

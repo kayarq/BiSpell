@@ -21,6 +21,7 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
 │         Check │ Suggest │ Apply │ Tray │ Settings           │
 │         Global hotkey (Ctrl+Alt+.) │ UIA assist + Clipboard │
+│         Editor as-you-type (debounced) + suggestion popup   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +56,8 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage** (remove / unignore), **min word length**, **persistent settings**, **system tray** (show / quit).
 4. **Phase 2 clipboard utility:** global hotkey (**Ctrl+Alt+.**, fallback **Win+Shift+.**), optional **clipboard replace** after top-suggestion apply, shell toggles in settings.
 5. **Phase 3 UIA assist:** on the same hotkey, prefer **focused-control ValuePattern** read/write when possible (Tier A/B), else Phase 2 clipboard (Tier C). Settings: `uiaAssistEnabled` (default true). Optional **Probe focused control** button. **Not** continuous monitoring / overlay underlines.
-6. Docs and CMake so core tests run on Linux; app builds on a Windows host.
+6. **Phase 4 in-editor as-you-type:** debounced live check in the main editor only + suggestion popup (Enter / 1–5 / Esc). Settings: `asYouTypeEnabled` (default true), `debounceMilliseconds` (default 250, UI NumberBox). **Not** system-wide continuous monitoring.
+7. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
 
@@ -163,7 +165,7 @@ swift build -c release
 
 | File | Role |
 |------|------|
-| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled` (all three default **true** when missing). Loaded at startup; saved when toggles change. |
+| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled`, `asYouTypeEnabled` (utility flags + as-you-type default **true** when missing). Loaded at startup; saved when toggles change. |
 | `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
 
 Full path examples (per-user profile):
@@ -277,9 +279,36 @@ On the **same global hotkey**, when **`uiaAssistEnabled`** is true (default), Bi
 - Self-focus (BiSpell process): orchestrator avoids fighting own controls (editor text or clipboard).
 - **Not** always-on underlines; **not** a full Accessibility overlay product.
 
+### Phase 4 — editor as-you-type + suggestion popup
+
+**In-app only** (the main `EditorBox`). Does **not** watch other apps or register UIA focus observers. Phase 3’s global hotkey remains the cross-app utility.
+
+| Piece | Behavior |
+|-------|----------|
+| **As-you-type check** checkbox | Shell-only `asYouTypeEnabled` (default **true**). Off → no TextChanged scheduling; F7 / Check / utility hotkey unchanged. |
+| **Debounce (ms)** NumberBox | `debounceMilliseconds` (default **250**, clamp 0–5000). Wait after typing before re-checking; also in native `BispellSettings`. |
+| Scheduler | `EditorSpellDebouncer` — single-shot `DispatcherQueueTimer`; each edit supersedes the previous pending check. |
+| Live list | Same misspelling list / model as F7; auto-selects miss nearest caret; softer status (`Live: N misspellings`). |
+| Large text | If length &gt; ~4000 UTF-16 units, uses engine **near-caret** window (radius 256); F7 remains full-document. |
+| Suggestion popup | `SuggestionPopupController` (WinUI `Popup`, best-effort near word/caret). |
+| Keyboard (popup open) | **Enter** = apply selected/top; **1–5** = that suggestion; **Esc** = dismiss. Handled before editor newline/digit insert. |
+| Programmatic text | Apply / utility `RefreshEditor` set `_suppressAsYouType` so TextChanged does not storm checks. |
+| Smoke | `BISPELL_SMOKE=1` → TextChanged schedule no-op; debouncer never arms timers; popup Show no-ops. |
+
+#### How to use
+
+1. Leave **As-you-type check** on (default). Optionally set **Debounce (ms)** (e.g. 250).
+2. Type in the main editor, e.g. `I recieve mail. merhabaa dünya`.
+3. After ~debounce ms of quiet, the misspellings list refreshes and a suggestion popup appears for the miss nearest the caret.
+4. Press **Enter** or **1** to apply; **Esc** to dismiss without applying.
+5. Uncheck as-you-type → further typing does not auto-check; **F7** still runs a full check.
+6. Global hotkey / UIA / clipboard (Phase 2–3) are unchanged and do not drive as-you-type.
+
+**Non-goals (still out):** system-wide continuous underlines, multi-app focus observers, red underlines inside the TextBox, Mac overlay pixel parity.
+
 ## Status
 
-**Windows MVP (U1–U5 + U7) + Phase 2 + Phase 3 UIA assist are integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
+**Windows MVP (U1–U5 + U7) + Phase 2 + Phase 3 UIA assist + Phase 4 editor as-you-type are integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
 
 | Layer | State |
 |-------|--------|
@@ -289,9 +318,10 @@ On the **same global hotkey**, when **`uiaAssistEnabled`** is true (default), Bi
 | Phase 1: min word length + lexicon manage (remove/unignore) | ✅ P1-SETTINGS / P1-LEXUI |
 | Phase 2: global hotkey + clipboard replace + GLUE | ✅ P2-SETTINGS / P2-HOTKEY / P2-CLIP / P2-GLUE (`BISPELL_SMOKE` skips hotkey) |
 | Phase 3: UIA assist + UIA-first hotkey + tiers + probe | ✅ P3-SETTINGS / P3-UIA / P3-GLUE / P3-PROBE (`BISPELL_SMOKE` skips UIA + hotkey) |
+| Phase 4: editor as-you-type + suggestion popup + debounce UI | ✅ P4-SETTINGS / P4-DEBOUNCE / P4-POPUP / P4-GLUE (`BISPELL_SMOKE` no-ops as-you-type timers) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
-| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.7) |
+| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.8) |
 | macOS Swift product | ✅ Unchanged |
 | U6 UIA probe (historical optional research) | ✅ **Subsumed** by Phase 3 hotkey UIA (not continuous monitoring) |
 

@@ -18,6 +18,7 @@ This tree hosts a portable C++ spell core (algorithm parity with Swift `BiSpellC
 | Tray | WinForms `NotifyIcon` | Show window / Quit (unpackaged); balloon on clipboard utility |
 | Global hotkey | Win32 `RegisterHotKey` | **Ctrl+Alt+.** primary; **Win+Shift+.** fallback; UIA-first + clipboard utility |
 | UIA assist (Phase 3) | Soft-fail COM `CUIAutomation` | ValuePattern read/write on focused control; Tier A/B/C; clipboard fallback |
+| As-you-type (Phase 4) | Editor-only debounce + popup | `asYouTypeEnabled` + `debounceMilliseconds`; **not** system-wide |
 
 **Future alternative (not dual product path):** a C++/WinRT shell could static-link `bispell_core` in one MSBuild solution later. Keep a single app tree under `windows/app/` (C# today); do not maintain a parallel incomplete C++/WinRT product.
 
@@ -197,6 +198,8 @@ Settings card on the main window (persisted to AppData):
 | **Global hotkey** | Shell-only. When on (default), register the utility hotkey (no app restart). Off → unregister. |
 | **Clipboard replace** | Shell-only. When on (default), write fixed text back to the **clipboard** on fallback / Tier B clipboard write. For **UIA SetValue**, same switch is “auto-apply”: when **off**, UIA may still **read + check** but must **not** SetValue (status / window for review). |
 | **UIA assist** | Shell-only. When on (default), try **focused-control UIA** (ValuePattern) before the Phase 2 clipboard path. Off → pure clipboard utility. |
+| **As-you-type check** | Shell-only. When on (default), debounced live check in the **main editor** only (not other apps). Off → F7 / utility hotkey still work. JSON: `asYouTypeEnabled`. |
+| **Debounce (ms)** | Wait after typing before re-checking (0–5000, default **250**). JSON: `debounceMilliseconds`. Also pushed to native settings. |
 
 A caption under the utility toggles shows the **active binding** (e.g. `Ctrl+Alt+.`) or why registration failed / was skipped.
 
@@ -217,7 +220,7 @@ System-wide hotkey: **UIA-first** (when **UIA assist** is on), then **clipboard*
 | **B** | ValuePattern **read only** (or write fails) | Some rich / restricted fields | Read + spell; write via **clipboard** if replace is on (user pastes) |
 | **C** | No UIA access | Many Chromium / Electron fields, elevated apps, password, no focus | **Identical** Phase 2 clipboard path (copy → hotkey → paste) |
 
-**Not** continuous as-you-type monitoring and **not** system-wide overlay underlines — hotkey-triggered only.
+**Not** continuous multi-app monitoring and **not** system-wide overlay underlines — utility is hotkey-triggered only. (Phase 4 as-you-type is **in-app editor only**.)
 
 #### How to use
 
@@ -246,7 +249,18 @@ System-wide hotkey: **UIA-first** (when **UIA assist** is on), then **clipboard*
 
 Feedback: status line + tray balloon (path label `UIA` / `clipboard`, tier when useful). Empty clipboard, spell-check off, or zero misspellings get a short status/balloon and no write.
 
-**Smoke / CI:** when `BISPELL_SMOKE=1` (set by `windows/app/scripts/smoke-launch.ps1` for GHA and local zip smoke), the app **never registers** the hotkey, **skips UIA COM** on utility/probe paths, and skips MessageBox modals so headless launch cannot hang. Manual UIA/hotkey E2E is for interactive Windows only.
+**Smoke / CI:** when `BISPELL_SMOKE=1` (set by `windows/app/scripts/smoke-launch.ps1` for GHA and local zip smoke), the app **never registers** the hotkey, **skips UIA COM** on utility/probe paths, **no-ops as-you-type debounce timers** (Phase 4), and skips MessageBox modals so headless launch cannot hang. Manual UIA/hotkey / as-you-type E2E is for interactive Windows only.
+
+### As-you-type (Phase 4 — editor only)
+
+While typing in the main editor (with **As-you-type check** on):
+
+1. After **Debounce (ms)** of quiet typing, BiSpell re-checks the editor text (full document, or near-caret for large text).
+2. The misspellings list updates; a **suggestion popup** appears for the miss nearest the caret.
+3. **Enter** / **1–5** apply a suggestion; **Esc** dismisses. **F7** still runs an immediate full check.
+4. Uncheck as-you-type to disable live checks without affecting the global hotkey.
+
+This is **not** system-wide continuous monitoring — other apps still use Phase 2/3 hotkey + UIA/clipboard.
 
 ### Lexicon manage UI (Phase 1)
 
@@ -263,7 +277,7 @@ Remove / Unignore refresh the lists and re-run check immediately. File-backed le
 
 | Path | Contents |
 |------|----------|
-| `%APPDATA%\BiSpell\settings.json` | `isEnabled`, TR/EN, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`, plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled` (all three utility flags default **true** when missing) |
+| `%APPDATA%\BiSpell\settings.json` | `isEnabled`, TR/EN, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`, plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled`, `asYouTypeEnabled` (utility + as-you-type flags default **true** when missing) |
 | `%APPDATA%\BiSpell\user-lexicon.json` | Personal dictionary (`addedWords`) + ignore list (`ignoredWords`) |
 
 - **Settings relaunch:** change Min word length / languages → quit → relaunch → UI and check behavior match.
@@ -282,7 +296,9 @@ Full steps: [`docs/WINDOWS.md`](../docs/WINDOWS.md) → *User data* / *Persisten
 | Key | Action |
 |-----|--------|
 | **F7** | Run spell-check on the main editor |
-| **Enter** | Apply selected (or top) suggestion when focus is not in the editor |
+| **Enter** | Apply selected (or top) suggestion when focus is not in the editor; when suggestion popup is open, applies top/selected popup suggestion |
+| **1–5** | When suggestion popup is open: apply that suggestion index |
+| **Esc** | When suggestion popup is open: dismiss without applying |
 | **Ctrl+Alt+.** (or **Win+Shift+.** fallback) | Global: UIA-first + clipboard utility (Phase 2/3; disabled in smoke) |
 
 ### Interop contract
@@ -318,6 +334,7 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 | U7 | Docs finalize, SoT note, CMake top-level, `.github/workflows/windows-core.yml` |
 | Phase 2 | Global hotkey + clipboard batch fix + settings toggles (P2-HOTKEY / P2-CLIP / P2-SETTINGS / P2-GLUE) |
 | Phase 3 | UIA assist (ValuePattern) + UIA-first hotkey + tier A/B/C + probe button (P3-SETTINGS / P3-UIA / P3-GLUE / P3-PROBE); U6 research **productized** as hotkey UIA |
+| Phase 4 | Editor as-you-type + suggestion popup + debounce UI (P4-SETTINGS / P4-DEBOUNCE / P4-POPUP / P4-GLUE); smoke no-ops timers |
 | U6 | Historical “optional UIA probe” — **subsumed** by Phase 3 utility (not continuous monitoring) |
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).

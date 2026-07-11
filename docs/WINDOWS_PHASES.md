@@ -15,6 +15,7 @@ Checklist for the fork-friendly Windows path under [`windows/`](../windows/). ma
 | **U7** | Integration glue, dictionary packaging, CI notes | ✅ | Docs finalize, SoT note, Linux CI workflow, CMake top-level |
 | **P2** | Global hotkey + clipboard batch fix | ✅ | Ctrl+Alt+. / Win+Shift+.; `BISPELL_SMOKE` skips hotkey |
 | **P3** | UIA assist + UIA-first hotkey + tiers A/B/C + probe | ✅ | `uiaAssistEnabled`; soft-fail COM; smoke skips UIA + hotkey |
+| **P4** | Editor as-you-type + suggestion popup | ✅ | `asYouTypeEnabled` + debounce UI; editor-only; smoke no-ops timers |
 
 ## MVP acceptance matrix
 
@@ -85,6 +86,19 @@ Full detail: [`windows/README.md`](../windows/README.md), [`docs/WINDOWS.md`](WI
 4. **Tier C:** apps without ValuePattern still work via copy → hotkey → paste.
 5. **Probe focused control:** status + CrashLog show `tier=` / read/write; no modal.
 6. **Smoke:** `BISPELL_SMOKE=1` launch OK; no hotkey register; UIA paths soft no-op (no hang).
+
+### Phase 4 as-you-type checklist (Windows host)
+
+1. **Live check:** Clear editor → type `I recieve mail. merhabaa dünya` → within ~1s after pause, list shows both misses (as-you-type on; keys `asYouTypeEnabled`, `debounceMilliseconds`).
+2. **Popup:** Nearest miss (e.g. `recieve`) → popup suggestions → press **1** or **Enter** → word fixed → list updates.
+3. **Esc:** Open popup → Esc → dismissed; text unchanged.
+4. **Debounce UI:** Set debounce to 800 ms → rapid type → one refresh after quiet period (not per keystroke).
+5. **Toggle off:** Uncheck as-you-type → type more errors → list does not auto-update until F7.
+6. **F7 still works** with as-you-type off or on.
+7. **Utility hotkey:** Notepad / clipboard path still works (Phase 3 checklist subset).
+8. **Lexicon:** Add word from misspelling → recheck clears it.
+9. **Smoke env:** `BISPELL_SMOKE=1` launch OK; no as-you-type timer spam in startup log.
+10. **Settings persist:** as-you-type + debounce survive relaunch.
 
 ## macOS (unchanged)
 

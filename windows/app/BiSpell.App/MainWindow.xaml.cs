@@ -1,6 +1,7 @@
 using BiSpell.Interop;
 using BiSpell.Models;
 using BiSpell.Services;
+using BiSpell.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -22,7 +23,13 @@ namespace BiSpell;
 /// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength /
 /// debounceMilliseconds plus shell-only globalHotkeyEnabled / clipboardReplaceEnabled /
 /// uiaAssistEnabled / asYouTypeEnabled (shell flags not in native ABI; debounce ms is).
-/// Path hint under the card title. As-you-type TextChanged pipeline is P4-GLUE (not here).
+/// Path hint under the card title.
+///
+/// As-you-type (P4-GLUE): <see cref="EditorBox"/> TextChanged →
+/// <see cref="EditorSpellDebouncer"/> → shared check → list + nearest miss +
+/// <see cref="SuggestionPopupController"/>. Editor-only; not system-wide UIA.
+/// Smoke / <c>_suppressAsYouType</c> / toggle-off skip scheduling. Root keyboard
+/// routes Enter/1–5/Esc to the popup when open.
 ///
 /// Utility hotkey (P2/P3-GLUE mandate B): App invokes <see cref="HandleUtilityHotkey"/> on
 /// the UI dispatcher. Orchestration lives in <see cref="UtilityHotkeyOrchestrator"/>
@@ -41,6 +48,9 @@ namespace BiSpell;
 /// </summary>
 public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 {
+    /// <summary>Near-caret window radius (UTF-16) when document exceeds threshold.</summary>
+    private const int NearCaretWindowRadius = 256;
+
     private BispellEngine? _engine;
     private MisspellingItem? _selectedMisspelling;
     private string? _lastError;
@@ -58,6 +68,27 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     /// <summary>Shared soft-fail UIA facade for the probe button (COM cache inside).</summary>
     private readonly UiaTextAccess _uiaProbe = new();
 
+    /// <summary>P4-GLUE: debounced as-you-type scheduler (UI dispatcher only).</summary>
+    private EditorSpellDebouncer? _editorSpellDebouncer;
+
+    /// <summary>P4-GLUE: suggestion popup near editor / caret estimate.</summary>
+    private SuggestionPopupController? _suggestionPopup;
+
+    /// <summary>
+    /// True while programmatically setting <see cref="EditorBox"/>.Text (apply / utility
+    /// RefreshEditor) so TextChanged does not storm debounced checks.
+    /// </summary>
+    private bool _suppressAsYouType;
+
+    /// <summary>Re-entrancy guard for check paths (F7 + as-you-type fire).</summary>
+    private bool _checkBusy;
+
+    /// <summary>
+    /// When true, misspelling list selection updates model/suggestions without focusing
+    /// the editor or replacing the caret (as-you-type live refresh).
+    /// </summary>
+    private bool _suppressMissListSideEffects;
+
     public MainWindow()
     {
         // W2: ctor is wrapped by App.OnLaunched try/catch → WriteFatal + Environment.Exit(1).
@@ -71,6 +102,29 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
         // P3-GLUE: host = this (engine/settings/UI); orchestrator owns UIA + clipboard IO.
         _utilityOrchestrator = new UtilityHotkeyOrchestrator(this);
+
+        // P4-GLUE: debouncer + suggestion popup + TextChanged (after visual tree exists).
+        // Smoke: Schedule is a hard no-op inside the debouncer; TextChanged also early-returns.
+        try
+        {
+            _editorSpellDebouncer = new EditorSpellDebouncer(DispatcherQueue);
+            _editorSpellDebouncer.Configure(_settings.DebounceMilliseconds, OnAsYouTypeFire);
+
+            if (EditorBox is not null)
+            {
+                _suggestionPopup = new SuggestionPopupController(EditorBox);
+                _suggestionPopup.SuggestionChosen += SuggestionPopup_SuggestionChosen;
+                EditorBox.TextChanged += EditorBox_TextChanged;
+                // Digits/Enter often stay on the TextBox; handle before insert when popup open.
+                EditorBox.KeyDown += EditorBox_KeyDown;
+            }
+            CrashLog.Write("MainWindow ctor: as-you-type debouncer + popup wired");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("MainWindow ctor: as-you-type wire failed (non-fatal):");
+            CrashLog.Write(ex);
+        }
 
         // 2) Drive all boolean / numeric state from code while handlers are still unwired.
         LoadSettingsIntoUi();
@@ -108,6 +162,38 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         {
             // Persist latest settings on teardown.
             try { SaveSettingsFromUi(); } catch { /* ignore */ }
+
+            // P4-GLUE: stop timers / popup before engine dispose (no fire after close).
+            try
+            {
+                _editorSpellDebouncer?.Cancel();
+                _editorSpellDebouncer?.Dispose();
+                _editorSpellDebouncer = null;
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                if (_suggestionPopup is not null)
+                {
+                    _suggestionPopup.SuggestionChosen -= SuggestionPopup_SuggestionChosen;
+                    _suggestionPopup.Hide();
+                    _suggestionPopup.Dispose();
+                    _suggestionPopup = null;
+                }
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                if (EditorBox is not null)
+                {
+                    EditorBox.TextChanged -= EditorBox_TextChanged;
+                    EditorBox.KeyDown -= EditorBox_KeyDown;
+                }
+            }
+            catch { /* ignore */ }
+
             _engine?.Dispose();
             _engine = null;
         };
@@ -359,17 +445,34 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     }
 
     /// <summary>
-    /// Shell-only editor toggles (as-you-type). Persist only; not in <see cref="BispellSettings"/>.
-    /// P4-GLUE will also cancel/restart the debounce scheduler when this fires; this unit
-    /// only saves + status feedback (no TextChanged pipeline).
+    /// Shell-only editor toggles (as-you-type). Persist; cancel debouncer + hide popup when off;
+    /// optional immediate schedule when turned on and the editor has text.
     /// </summary>
     private void EditorSettings_Changed(object sender, RoutedEventArgs e)
     {
         if (_suppressSettingsEvents) return;
 
         SaveSettingsFromUi();
+
+        if (!_settings.AsYouTypeEnabled)
+        {
+            try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
+            try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+            SetStatus(
+                "Editor settings saved (as-you-type=off). Typing will not auto-check; F7 still works.",
+                CountFromList());
+            return;
+        }
+
+        // Toggled on: one schedule if there is text (smoke / suppress still gate inside).
+        try
+        {
+            ScheduleAsYouTypeCheck();
+        }
+        catch { /* ignore */ }
+
         SetStatus(
-            $"Editor settings saved (as-you-type={(_settings.AsYouTypeEnabled ? "on" : "off")}).",
+            $"Editor settings saved (as-you-type=on, debounce={_settings.DebounceMilliseconds} ms).",
             CountFromList());
     }
 
@@ -529,8 +632,20 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     {
         try
         {
-            if (EditorBox is not null)
-                EditorBox.Text = text ?? string.Empty;
+            // Suppress as-you-type while utility pastes text into the editor (no check storm).
+            _suppressAsYouType = true;
+            try
+            {
+                if (EditorBox is not null)
+                    EditorBox.Text = text ?? string.Empty;
+            }
+            finally
+            {
+                _suppressAsYouType = false;
+            }
+
+            try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+            try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
 
             if (MisspellingsList is not null)
                 MisspellingsList.ItemsSource = misses;
@@ -543,6 +658,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
         catch (Exception ex)
         {
+            _suppressAsYouType = false;
             CrashLog.Write("RefreshEditor (utility): " + ex.Message);
         }
 
@@ -644,6 +760,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         SaveSettingsFromUi();
         // Debounce is in BispellSettings; keep native in sync for consistency.
         ApplySettingsToEngine();
+        // Next as-you-type Schedule reads _settings.DebounceMilliseconds; keep property in sync.
+        if (_editorSpellDebouncer is not null)
+            _editorSpellDebouncer.DebounceMilliseconds = _settings.DebounceMilliseconds;
         SetStatus(
             $"Debounce = {_settings.DebounceMilliseconds} ms (saved). Wait after typing before re-checking.",
             CountFromList());
@@ -801,8 +920,24 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
     private void RunCheck()
     {
+        // Manual F7 / Check: full document, user-facing status; dismiss popup first.
+        try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+        RunCheckCore(interactiveStatus: true, asYouType: false);
+    }
+
+    /// <summary>
+    /// Shared spell-check path for F7 and as-you-type. Updates misspelling list; as-you-type
+    /// also auto-selects nearest miss to caret and shows the suggestion popup.
+    /// </summary>
+    /// <param name="interactiveStatus">True → full F7 status strings + ErrorBar on failure.</param>
+    /// <param name="asYouType">True → near-caret for large text, softer status, popup.</param>
+    private void RunCheckCore(bool interactiveStatus, bool asYouType)
+    {
+        if (_checkBusy) return;
+
         if (_engine is null)
         {
+            if (asYouType) return; // soft no-op while engine still loading
             TryInitEngine();
             if (_engine is null)
             {
@@ -811,41 +946,266 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             }
         }
 
+        _checkBusy = true;
         try
         {
             // Push latest settings so enable/maxSuggestions gate the check.
             ApplySettingsToEngine();
 
-            var text = EditorBox.Text ?? string.Empty;
-            var misspellings = _engine.Check(text);
-            MisspellingsList.ItemsSource = misspellings;
-            SuggestionsList.ItemsSource = null;
-            _selectedMisspelling = null;
-            UpdateActionButtons();
+            var text = EditorBox?.Text ?? string.Empty;
+            int caret = 0;
+            try { caret = EditorBox?.SelectionStart ?? 0; }
+            catch { caret = 0; }
+            if (caret < 0) caret = 0;
+            if (caret > text.Length) caret = text.Length;
 
-            int n = misspellings.Count;
-            if (!_settings.IsEnabled)
+            bool nearCaretOnly = asYouType
+                && EditorSpellDebouncer.ShouldUseNearCaret(text.Length);
+            int windowRadius = nearCaretOnly ? NearCaretWindowRadius : 120;
+
+            IReadOnlyList<MisspellingItem> misspellings = _engine.Check(
+                text,
+                caretUtf16: asYouType || nearCaretOnly ? caret : -1,
+                nearCaretOnly: nearCaretOnly,
+                windowRadius: windowRadius);
+
+            _suppressMissListSideEffects = asYouType;
+            try
             {
-                SetStatus("Spell-check is disabled in settings — empty result.", 0);
+                if (MisspellingsList is not null)
+                    MisspellingsList.ItemsSource = misspellings;
+
+                if (asYouType)
+                {
+                    // Live path: nearest miss to caret; fill suggestions without stealing focus.
+                    var nearest = FindNearestMisspelling(misspellings, caret);
+                    _selectedMisspelling = nearest;
+
+                    IReadOnlyList<string> suggestions = Array.Empty<string>();
+                    if (nearest is not null)
+                    {
+                        suggestions = nearest.Suggestions;
+                        if (suggestions.Count == 0 && _engine is not null)
+                        {
+                            try
+                            {
+                                suggestions = _engine.Suggestions(nearest.Word, nearest.Language);
+                            }
+                            catch (Exception ex)
+                            {
+                                _lastError = ex.Message;
+                            }
+                        }
+
+                        if (MisspellingsList is not null)
+                        {
+                            try { MisspellingsList.SelectedItem = nearest; }
+                            catch { /* selection best-effort */ }
+                        }
+                    }
+                    else if (MisspellingsList is not null)
+                    {
+                        try { MisspellingsList.SelectedItem = null; }
+                        catch { /* ignore */ }
+                    }
+
+                    if (SuggestionsList is not null)
+                    {
+                        SuggestionsList.ItemsSource = suggestions.Count > 0 ? suggestions : null;
+                        if (suggestions.Count > 0)
+                            SuggestionsList.SelectedIndex = 0;
+                    }
+
+                    UpdateActionButtons();
+
+                    int n = misspellings.Count;
+                    if (!_settings.IsEnabled)
+                    {
+                        try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                        SetStatus("Live: spell-check disabled — empty result.", 0);
+                    }
+                    else
+                    {
+                        SetStatus(
+                            n == 0
+                                ? "Live: no misspellings."
+                                : $"Live: {n} misspelling{(n == 1 ? "" : "s")}"
+                                  + (nearCaretOnly ? " (near caret)" : "")
+                                  + (nearest is not null ? $" — “{nearest.Word}”." : "."),
+                            n);
+
+                        if (_settings.AsYouTypeEnabled
+                            && nearest is not null
+                            && suggestions.Count > 0
+                            && !CrashLog.IsSmokeMode)
+                        {
+                            try { _suggestionPopup?.Show(nearest, suggestions); }
+                            catch (Exception ex)
+                            {
+                                CrashLog.Write("as-you-type popup Show failed: " + ex.Message);
+                            }
+                        }
+                        else
+                        {
+                            try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                        }
+                    }
+                }
+                else
+                {
+                    // F7 / manual: clear selection; user picks from the list.
+                    if (SuggestionsList is not null)
+                        SuggestionsList.ItemsSource = null;
+                    _selectedMisspelling = null;
+                    UpdateActionButtons();
+
+                    int n = misspellings.Count;
+                    if (!_settings.IsEnabled)
+                    {
+                        SetStatus("Spell-check is disabled in settings — empty result.", 0);
+                    }
+                    else if (interactiveStatus)
+                    {
+                        SetStatus(n == 0
+                            ? "No misspellings found."
+                            : $"Found {n} misspelling{(n == 1 ? "" : "s")}. Select one to see suggestions.", n);
+                    }
+                }
             }
-            else
+            finally
             {
-                SetStatus(n == 0
-                    ? "No misspellings found."
-                    : $"Found {n} misspelling{(n == 1 ? "" : "s")}. Select one to see suggestions.", n);
+                _suppressMissListSideEffects = false;
             }
-            ErrorBar.IsOpen = false;
+
+            if (ErrorBar is not null)
+                ErrorBar.IsOpen = false;
         }
         catch (BispellException ex)
         {
-            ShowError("Spell check failed", ex.Message);
-            SetStatus("Check failed.", MisspellingsList.Items?.Count ?? 0);
+            if (interactiveStatus)
+            {
+                ShowError("Spell check failed", ex.Message);
+                SetStatus("Check failed.", MisspellingsList?.Items?.Count ?? 0);
+            }
+            else
+            {
+                CrashLog.Write("as-you-type check failed: " + ex.Message);
+                try { SetStatus("Live check failed (soft).", CountFromList()); }
+                catch { /* ignore */ }
+            }
         }
         catch (Exception ex)
         {
-            ShowError("Spell check failed", ex.Message);
-            SetStatus("Check failed.", 0);
+            if (interactiveStatus)
+            {
+                ShowError("Spell check failed", ex.Message);
+                SetStatus("Check failed.", 0);
+            }
+            else
+            {
+                CrashLog.Write("as-you-type check failed:");
+                CrashLog.Write(ex);
+            }
         }
+        finally
+        {
+            _checkBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Debouncer fire target (UI thread). Soft status; nearest miss + popup.
+    /// </summary>
+    private void OnAsYouTypeFire()
+    {
+        if (CrashLog.IsSmokeMode) return;
+        if (!_settings.AsYouTypeEnabled) return;
+        if (_suppressAsYouType) return;
+        if (_engine is null) return;
+        if (!_settings.IsEnabled)
+        {
+            // Soft: leave or clear list without ErrorBar spam.
+            return;
+        }
+
+        RunCheckCore(interactiveStatus: false, asYouType: true);
+    }
+
+    /// <summary>
+    /// Schedule a debounced live check using current settings. No-op when disabled / smoke /
+    /// suppress / no debouncer.
+    /// </summary>
+    private void ScheduleAsYouTypeCheck()
+    {
+        if (CrashLog.IsSmokeMode) return;
+        if (!_settings.AsYouTypeEnabled) return;
+        if (_suppressAsYouType) return;
+        if (_editorSpellDebouncer is null) return;
+        if (_engine is null) return;
+        if (!_settings.IsEnabled) return;
+
+        _editorSpellDebouncer.Schedule(OnAsYouTypeFire, _settings.DebounceMilliseconds);
+    }
+
+    private void EditorBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        // Smoke: never schedule (debouncer also no-ops; belt-and-suspenders).
+        if (CrashLog.IsSmokeMode) return;
+        if (!_settings.AsYouTypeEnabled) return;
+        if (_suppressAsYouType) return;
+        // Soft no-op when engine offline or spell disabled (no throw).
+        if (_engine is null || !_settings.IsEnabled) return;
+
+        ScheduleAsYouTypeCheck();
+    }
+
+    private void SuggestionPopup_SuggestionChosen(object? sender, string suggestion)
+    {
+        if (string.IsNullOrEmpty(suggestion)) return;
+
+        // Popup clears CurrentMisspelling before the event; use list-selected / live selection.
+        var miss = _selectedMisspelling;
+        if (miss is null)
+        {
+            SetStatus("No misspelling selected for popup apply.", CountFromList());
+            return;
+        }
+
+        ApplySuggestionToMisspelling(miss, suggestion);
+    }
+
+    /// <summary>
+    /// Nearest misspelling by UTF-16 distance from caret to the word range (0 if caret inside).
+    /// </summary>
+    private static MisspellingItem? FindNearestMisspelling(
+        IReadOnlyList<MisspellingItem> items,
+        int caretUtf16)
+    {
+        if (items is null || items.Count == 0) return null;
+
+        MisspellingItem? best = null;
+        long bestDist = long.MaxValue;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var m = items[i];
+            int start = (int)m.Utf16Location;
+            int end = start + (int)m.Utf16Length;
+            long dist;
+            if (caretUtf16 < start)
+                dist = (long)start - caretUtf16;
+            else if (caretUtf16 > end)
+                dist = (long)caretUtf16 - end;
+            else
+                dist = 0;
+
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = m;
+            }
+        }
+
+        return best;
     }
 
     private void MisspellingsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -876,26 +1236,34 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (suggestions.Count > 0)
             SuggestionsList.SelectedIndex = 0;
 
-        // Highlight range in editor (selection uses UTF-16 indices = C# string indices).
-        try
+        // As-you-type live updates must not steal focus or rewrite the caret while typing.
+        if (!_suppressMissListSideEffects)
         {
-            int start = (int)_selectedMisspelling.Utf16Location;
-            int len = (int)_selectedMisspelling.Utf16Length;
-            var text = EditorBox.Text ?? string.Empty;
-            if (start >= 0 && len >= 0 && start + len <= text.Length)
+            // Highlight range in editor (selection uses UTF-16 indices = C# string indices).
+            try
             {
-                EditorBox.Select(start, len);
-                EditorBox.Focus(FocusState.Programmatic);
+                int start = (int)_selectedMisspelling.Utf16Location;
+                int len = (int)_selectedMisspelling.Utf16Length;
+                var text = EditorBox.Text ?? string.Empty;
+                if (start >= 0 && len >= 0 && start + len <= text.Length)
+                {
+                    EditorBox.Select(start, len);
+                    EditorBox.Focus(FocusState.Programmatic);
+                }
             }
-        }
-        catch { /* selection is best-effort */ }
+            catch { /* selection is best-effort */ }
 
-        UpdateActionButtons();
-        SetStatus(
-            $"Selected “{_selectedMisspelling.Word}” ({_selectedMisspelling.LanguageLabel}) — " +
-            $"{suggestions.Count} suggestion(s). Enter/double-click to apply.",
-            (MisspellingsList.ItemsSource as IReadOnlyList<MisspellingItem>)?.Count
-                ?? MisspellingsList.Items.Count);
+            UpdateActionButtons();
+            SetStatus(
+                $"Selected “{_selectedMisspelling.Word}” ({_selectedMisspelling.LanguageLabel}) — " +
+                $"{suggestions.Count} suggestion(s). Enter/double-click to apply.",
+                (MisspellingsList.ItemsSource as IReadOnlyList<MisspellingItem>)?.Count
+                    ?? MisspellingsList.Items.Count);
+        }
+        else
+        {
+            UpdateActionButtons();
+        }
     }
 
     private void SuggestionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -930,6 +1298,10 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
     private void RootGrid_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // P4-GLUE: when suggestion popup is open, Enter / 1–5 / Esc first (before editor newline).
+        if (TryHandlePopupKey(e))
+            return;
+
         if (e.Key == VirtualKey.F7)
         {
             RunCheck();
@@ -946,6 +1318,39 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 e.Handled = true;
             }
         }
+    }
+
+    /// <summary>
+    /// Editor-focused path: TextBox often consumes digits/Enter before RootGrid KeyDown.
+    /// When the suggestion popup is open, route those keys first and mark Handled.
+    /// </summary>
+    private void EditorBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        TryHandlePopupKey(e);
+    }
+
+    /// <summary>
+    /// If popup open and key is Enter/1–5/Esc, handle and set <c>e.Handled</c>. Returns true when handled.
+    /// </summary>
+    private bool TryHandlePopupKey(KeyRoutedEventArgs e)
+    {
+        if (_suggestionPopup is null || !_suggestionPopup.IsOpen)
+            return false;
+
+        try
+        {
+            if (_suggestionPopup.TryHandleKey(e.Key))
+            {
+                e.Handled = true;
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("popup key: " + ex.Message);
+        }
+
+        return false;
     }
 
     private bool IsEditorFocused()
@@ -988,9 +1393,24 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             return;
         }
 
+        ApplySuggestionToMisspelling(_selectedMisspelling, suggestion);
+    }
+
+    /// <summary>
+    /// Shared apply path for list/popup: replace UTF-16 range, suppress as-you-type during
+    /// programmatic Text set, dismiss popup, place caret after replacement, re-check.
+    /// </summary>
+    private void ApplySuggestionToMisspelling(MisspellingItem miss, string suggestion)
+    {
+        if (miss is null || string.IsNullOrEmpty(suggestion))
+        {
+            SetStatus("No suggestion to apply.", CountFromList());
+            return;
+        }
+
         var text = EditorBox.Text ?? string.Empty;
-        int start = (int)_selectedMisspelling.Utf16Location;
-        int len = (int)_selectedMisspelling.Utf16Length;
+        int start = (int)miss.Utf16Location;
+        int len = (int)miss.Utf16Length;
 
         if (start < 0 || len < 0 || start + len > text.Length)
         {
@@ -1002,24 +1422,36 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
         // Verify the range still matches the expected word (user may have edited).
         var current = text.Substring(start, len);
-        if (!string.Equals(current, _selectedMisspelling.Word, StringComparison.Ordinal))
+        if (!string.Equals(current, miss.Word, StringComparison.Ordinal))
         {
             SetStatus(
-                $"Text changed under “{_selectedMisspelling.Word}” (now “{current}”). Re-run Check.",
+                $"Text changed under “{miss.Word}” (now “{current}”). Re-run Check.",
                 CountFromList());
             return;
         }
 
-        EditorBox.Text = string.Concat(text.AsSpan(0, start), suggestion, text.AsSpan(start + len));
-        // Place caret after the replacement (UTF-16 units).
-        int newCaret = start + suggestion.Length;
+        try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+
+        // Suppress TextChanged → debouncer during programmatic replace (prevents thrash/loops).
+        _suppressAsYouType = true;
         try
         {
-            EditorBox.Select(newCaret, 0);
+            EditorBox.Text = string.Concat(text.AsSpan(0, start), suggestion, text.AsSpan(start + len));
+            // Place caret after the replacement (UTF-16 units).
+            int newCaret = start + suggestion.Length;
+            try
+            {
+                EditorBox.Select(newCaret, 0);
+            }
+            catch { /* ignore */ }
         }
-        catch { /* ignore */ }
+        finally
+        {
+            _suppressAsYouType = false;
+        }
 
         SetStatus($"Applied “{suggestion}” at UTF-16 {start}+{len}. Re-checking…", CountFromList());
+        // Immediate full recheck (same as pre-P4 apply loop); popup already dismissed.
         RunCheck();
     }
 
