@@ -10,6 +10,9 @@ namespace BiSpell;
 /// Owns tray icon lifecycle: Show window / Quit. Closing the main window hides to tray
 /// unless the user chose Quit (or there is no tray).
 /// Still no system-wide other-app injection.
+///
+/// Startup failure path (W2 Mandate B): log type+message+stack, write
+/// %TEMP%\BiSpell-startup.status fail:…, MessageBox only when not smoke, Environment.Exit(1).
 /// </summary>
 public partial class App : Application
 {
@@ -23,19 +26,30 @@ public partial class App : Application
         {
             CrashLog.Write("App ctor: InitializeComponent");
             InitializeComponent();
+            CrashLog.Write("App ctor: InitializeComponent done");
         }
         catch (Exception ex)
         {
-            CrashLog.Write(ex);
+            CrashLog.WriteFatal(ex, "App.InitializeComponent");
             CrashLog.MessageBox("BiSpell XAML init failed", ex.Message);
             throw;
         }
 
         UnhandledException += (_, e) =>
         {
-            CrashLog.Write("UnhandledException: " + e.Exception);
-            // Keep false so process can terminate visibly; still log to disk.
+            // Keep Handled=false so the process can terminate with a visible failure;
+            // still log full exception for smoke string search.
+            try
+            {
+                if (e.Exception is not null)
+                    CrashLog.WriteFatal(e.Exception, "UnhandledException");
+                else
+                    CrashLog.Write("UnhandledException: (null)");
+            }
+            catch { /* ignore */ }
+
             e.Handled = false;
+
             try
             {
                 CrashLog.MessageBox("BiSpell error", e.Exception?.Message ?? "unknown");
@@ -54,16 +68,22 @@ public partial class App : Application
         CrashLog.Write("OnLaunched");
         try
         {
+            CrashLog.Write("MainWindow creating");
             _window = new MainWindow();
             CrashLog.Write("MainWindow created");
             _window.Activate();
             CrashLog.Write("MainWindow.Activate done");
+            // Sentinel for smoke: one-line ok without parsing the full log.
+            CrashLog.WriteStatusOk();
         }
         catch (Exception ex)
         {
-            CrashLog.Write(ex);
+            // B2: log type + message + stack before process exit; searchable known-bad strings.
+            CrashLog.WriteFatal(ex, "MainWindow construction/activate");
             CrashLog.MessageBox("BiSpell window failed", ex.Message);
-            throw;
+            // B5/exit-code: do not rethrow into an ambiguous WinUI path — exit 1 now.
+            Environment.Exit(CrashLog.ExitStartupFailure);
+            return;
         }
 
         try
@@ -74,7 +94,8 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            // Tray is nice-to-have; app still runs without it.
+            // Tray is nice-to-have; app still runs without it. Log but do not fail startup.
+            CrashLog.Write("Tray init failed (non-fatal): " + ex);
             System.Diagnostics.Debug.WriteLine($"Tray init failed: {ex.Message}");
             _tray = null;
         }
@@ -86,6 +107,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            CrashLog.Write("AppWindow.Closing hook failed (non-fatal): " + ex.Message);
             System.Diagnostics.Debug.WriteLine($"AppWindow.Closing hook failed: {ex.Message}");
         }
     }
@@ -138,7 +160,7 @@ public partial class App : Application
         }
     }
 
-    /// <summary>Clean shutdown: save settings, dispose tray, close window, exit process.</summary>
+    /// <summary>Clean shutdown: save settings, dispose tray, close window, exit process 0.</summary>
     public void Quit()
     {
         if (_isQuitting) return;
@@ -160,6 +182,6 @@ public partial class App : Application
         catch { /* ignore */ }
 
         // Ensure process exit even if WinUI keeps the message loop alive after last window.
-        Environment.Exit(0);
+        Environment.Exit(CrashLog.ExitOk);
     }
 }

@@ -36,8 +36,13 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        // W2: ctor is wrapped by App.OnLaunched try/catch → WriteFatal + Environment.Exit(1).
+        // Markers here make XAML vs post-init failures easy to spot in BiSpell-startup.log.
+        CrashLog.Write("MainWindow ctor: begin");
+
         // 1) Build visual tree with inert settings controls (no XAML event/state coupling).
         InitializeComponent();
+        CrashLog.Write("MainWindow ctor: InitializeComponent done");
         Title = "BiSpell — Spell Check";
 
         // 2) Drive all boolean / numeric state from code while handlers are still unwired.
@@ -47,8 +52,10 @@ public sealed partial class MainWindow : Window
         //    Guarantees A1/A4/A5: no Settings_Changed during InitializeComponent, no early save.
         WireSettingsHandlers();
         _suppressSettingsEvents = false;
+        CrashLog.Write("MainWindow ctor: settings loaded + handlers wired");
 
         // Defer native engine load so a missing VC++ runtime / DLL cannot kill the window before paint.
+        // Engine failures are non-fatal for window startup (status already ok after Activate).
         try
         {
             DispatcherQueue.TryEnqueue(() =>
@@ -56,6 +63,7 @@ public sealed partial class MainWindow : Window
                 try { TryInitEngine(); }
                 catch (Exception ex)
                 {
+                    CrashLog.Write("Engine init failed (non-fatal for window):");
                     CrashLog.Write(ex);
                     ShowError("Engine init failed", ex.Message);
                 }
@@ -73,6 +81,8 @@ public sealed partial class MainWindow : Window
             _engine?.Dispose();
             _engine = null;
         };
+
+        CrashLog.Write("MainWindow ctor: complete");
     }
 
     /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
@@ -271,6 +281,8 @@ public sealed partial class MainWindow : Window
         }
         catch (DllNotFoundException ex)
         {
+            // Keep DllNotFoundException text in startup log for smoke search (non-fatal window).
+            CrashLog.Write(ex);
             ShowError(
                 "Native library not found (bispell_core.dll)",
                 "P/Invoke could not load bispell_core.dll.\n" +
@@ -295,6 +307,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            CrashLog.Write(ex);
             ShowError("Unexpected startup error", ex.Message);
             SetStatus("Engine not loaded — unexpected error.", 0);
         }
