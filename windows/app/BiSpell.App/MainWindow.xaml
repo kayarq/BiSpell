@@ -57,14 +57,17 @@
                                TextWrapping="Wrap"
                                Text="Saved to %APPDATA%\BiSpell\settings.json"/>
 
-                    <!-- Row 1: enable + languages -->
+                    <!-- Row 1: enable + languages + as-you-type (P4-SETTINGS shell-only).
+                         No IsChecked / Checked / Unchecked in XAML (W1). -->
                     <StackPanel Orientation="Horizontal" Spacing="16">
                         <CheckBox x:Name="EnabledCheck" Content="Spell-check enabled"/>
                         <CheckBox x:Name="TurkishCheck" Content="Turkish"/>
                         <CheckBox x:Name="EnglishCheck" Content="English"/>
+                        <CheckBox x:Name="AsYouTypeCheck" Content="As-you-type check"/>
                     </StackPanel>
 
-                    <!-- Row 2: numeric limits with captions -->
+                    <!-- Row 2: numeric limits with captions (max suggestions / min word / debounce).
+                         Structure only: no Value / ValueChanged in XAML (W1). -->
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <TextBlock Text="Max suggestions" VerticalAlignment="Center"/>
@@ -88,6 +91,22 @@
                                            Width="100"/>
                             </StackPanel>
                             <TextBlock Text="Tokens shorter than this are skipped when checking."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Opacity="0.65"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="Debounce (ms)" VerticalAlignment="Center"/>
+                                <NumberBox x:Name="DebounceBox"
+                                           Minimum="0"
+                                           Maximum="5000"
+                                           SpinButtonPlacementMode="Inline"
+                                           SmallChange="50"
+                                           LargeChange="250"
+                                           Width="120"/>
+                            </StackPanel>
+                            <TextBlock Text="Wait after typing before re-checking."
                                        Style="{StaticResource CaptionTextBlockStyle}"
                                        Opacity="0.65"
                                        TextWrapping="Wrap"/>

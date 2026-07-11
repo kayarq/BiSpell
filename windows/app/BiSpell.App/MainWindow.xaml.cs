@@ -15,14 +15,14 @@ namespace BiSpell;
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
 ///
-/// Settings card (P1-SETTINGS Mandate B + W1 + P2-SETTINGS + P3-SETTINGS): XAML holds
-/// structure only (no IsChecked / Checked / Unchecked / Value / ValueChanged). Boolean
-/// and NumberBox state + handlers are applied in the ctor after InitializeComponent and
-/// LoadSettingsIntoUi so handlers never run mid-tree construction (root cause of
-/// ToggleButton.IsChecked assign failure in v0.1.3). Exposes enable / TR / EN /
-/// maxSuggestions / minWordLength plus shell-only globalHotkeyEnabled /
-/// clipboardReplaceEnabled / uiaAssistEnabled (not native ABI). Path hint under the card
-/// title. No debounce UI.
+/// Settings card (P1–P4-SETTINGS + W1): XAML holds structure only (no IsChecked /
+/// Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox state + handlers
+/// are applied in the ctor after InitializeComponent and LoadSettingsIntoUi so handlers
+/// never run mid-tree construction (root cause of ToggleButton.IsChecked assign failure
+/// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength /
+/// debounceMilliseconds plus shell-only globalHotkeyEnabled / clipboardReplaceEnabled /
+/// uiaAssistEnabled / asYouTypeEnabled (shell flags not in native ABI; debounce ms is).
+/// Path hint under the card title. As-you-type TextChanged pipeline is P4-GLUE (not here).
 ///
 /// Utility hotkey (P2/P3-GLUE mandate B): App invokes <see cref="HandleUtilityHotkey"/> on
 /// the UI dispatcher. Orchestration lives in <see cref="UtilityHotkeyOrchestrator"/>
@@ -127,6 +127,12 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     /// <summary>Shell setting: try focused-control UIA before clipboard on utility hotkey (P3).</summary>
     public bool IsUiaAssistEnabled => _settings.UiaAssistEnabled;
 
+    /// <summary>Shell setting: debounced as-you-type check in the editor (P4; GLUE wires TextChanged).</summary>
+    public bool IsAsYouTypeEnabled => _settings.AsYouTypeEnabled;
+
+    /// <summary>Current debounce wait in ms (native + as-you-type scheduler; default 250).</summary>
+    public int DebounceMilliseconds => _settings.DebounceMilliseconds;
+
     /// <summary>
     /// Attach Checked/Unchecked/ValueChanged only after InitializeComponent + LoadSettingsIntoUi.
     /// Idempotent. XAML must not declare these attributes.
@@ -159,6 +165,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (MinWordLengthBox is not null)
             MinWordLengthBox.ValueChanged += MinWordLengthBox_ValueChanged;
 
+        if (DebounceBox is not null)
+            DebounceBox.ValueChanged += DebounceBox_ValueChanged;
+
         // P2/P3-SETTINGS: shell-only utility toggles (no engine ApplySettingsToEngine needed).
         if (GlobalHotkeyCheck is not null)
         {
@@ -176,6 +185,13 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         {
             UiaAssistCheck.Checked += UtilitySettings_Changed;
             UiaAssistCheck.Unchecked += UtilitySettings_Changed;
+        }
+
+        // P4-SETTINGS: as-you-type is shell-only; persist only (GLUE will cancel/restart debounce).
+        if (AsYouTypeCheck is not null)
+        {
+            AsYouTypeCheck.Checked += EditorSettings_Changed;
+            AsYouTypeCheck.Unchecked += EditorSettings_Changed;
         }
 
         _settingsHandlersWired = true;
@@ -198,6 +214,8 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 MaxSuggestionsBox.Value = Math.Clamp(_settings.MaxSuggestions, 1, 20);
             if (MinWordLengthBox is not null)
                 MinWordLengthBox.Value = Math.Clamp(_settings.MinWordLength, 1, 10);
+            if (DebounceBox is not null)
+                DebounceBox.Value = Math.Clamp(_settings.DebounceMilliseconds, 0, 5000);
 
             // Shell-only utility flags (P2/P3-SETTINGS); not pushed to native BispellSettings.
             if (GlobalHotkeyCheck is not null)
@@ -206,6 +224,10 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 ClipboardReplaceCheck.IsChecked = (bool?)_settings.ClipboardReplaceEnabled;
             if (UiaAssistCheck is not null)
                 UiaAssistCheck.IsChecked = (bool?)_settings.UiaAssistEnabled;
+
+            // P4-SETTINGS: as-you-type shell toggle (default true; not native ABI).
+            if (AsYouTypeCheck is not null)
+                AsYouTypeCheck.IsChecked = (bool?)_settings.AsYouTypeEnabled;
 
             // Path hint: concrete settings.json location when AppData is available.
             if (SettingsPathHint is not null)
@@ -246,6 +268,12 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 ? 2
                 : (int)Math.Clamp(MinWordLengthBox.Value, 1, 10);
         }
+        if (DebounceBox is not null)
+        {
+            _settings.DebounceMilliseconds = double.IsNaN(DebounceBox.Value)
+                ? 250
+                : (int)Math.Clamp(DebounceBox.Value, 0, 5000);
+        }
 
         if (GlobalHotkeyCheck is not null)
             _settings.GlobalHotkeyEnabled = GlobalHotkeyCheck.IsChecked == true;
@@ -253,6 +281,8 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             _settings.ClipboardReplaceEnabled = ClipboardReplaceCheck.IsChecked == true;
         if (UiaAssistCheck is not null)
             _settings.UiaAssistEnabled = UiaAssistCheck.IsChecked == true;
+        if (AsYouTypeCheck is not null)
+            _settings.AsYouTypeEnabled = AsYouTypeCheck.IsChecked == true;
 
         _settings.Normalize();
         _settingsStore.Save(_settings);
@@ -325,6 +355,21 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             $"Utility settings saved (hotkey={(_settings.GlobalHotkeyEnabled ? "on" : "off")}, " +
             $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}, " +
             $"UIA assist={(_settings.UiaAssistEnabled ? "on" : "off")}).",
+            CountFromList());
+    }
+
+    /// <summary>
+    /// Shell-only editor toggles (as-you-type). Persist only; not in <see cref="BispellSettings"/>.
+    /// P4-GLUE will also cancel/restart the debounce scheduler when this fires; this unit
+    /// only saves + status feedback (no TextChanged pipeline).
+    /// </summary>
+    private void EditorSettings_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSettingsEvents) return;
+
+        SaveSettingsFromUi();
+        SetStatus(
+            $"Editor settings saved (as-you-type={(_settings.AsYouTypeEnabled ? "on" : "off")}).",
             CountFromList());
     }
 
@@ -578,6 +623,29 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         ApplySettingsToEngine();
         SetStatus(
             $"Min word length = {_settings.MinWordLength} (saved). Short tokens skipped on check. Press F7 to re-check.",
+            CountFromList());
+    }
+
+    private void DebounceBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_suppressSettingsEvents) return;
+        if (DebounceBox is null) return;
+        if (double.IsNaN(args.NewValue)) return;
+
+        // Clamp to model rule 0–5000 (matches AppUserSettings.Normalize / native ToNative).
+        double clamped = Math.Clamp(args.NewValue, 0, 5000);
+        if (!double.IsNaN(DebounceBox.Value) && Math.Abs(DebounceBox.Value - clamped) > 0.001)
+        {
+            _suppressSettingsEvents = true;
+            try { DebounceBox.Value = clamped; }
+            finally { _suppressSettingsEvents = false; }
+        }
+
+        SaveSettingsFromUi();
+        // Debounce is in BispellSettings; keep native in sync for consistency.
+        ApplySettingsToEngine();
+        SetStatus(
+            $"Debounce = {_settings.DebounceMilliseconds} ms (saved). Wait after typing before re-checking.",
             CountFromList());
     }
 

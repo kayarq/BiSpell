@@ -54,6 +54,14 @@ public sealed class AppUserSettings
     [JsonPropertyName("uiaAssistEnabled")]
     public bool UiaAssistEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Shell-only: when true (default), the in-app editor may run debounced as-you-type
+    /// spell check (P4-SETTINGS / P4-GLUE). Not part of <see cref="BispellSettings"/> /
+    /// native ABI. JSON: <c>asYouTypeEnabled</c>. Missing key → default true.
+    /// </summary>
+    [JsonPropertyName("asYouTypeEnabled")]
+    public bool AsYouTypeEnabled { get; set; } = true;
+
     public static AppUserSettings CreateDefault() => new();
 
     /// <summary>Clamp values to safe ranges used by the engine UI.</summary>
@@ -76,7 +84,9 @@ public sealed class AppUserSettings
     /// <summary>
     /// Native engine settings only. Does <b>not</b> include shell utility flags
     /// (<see cref="GlobalHotkeyEnabled"/>, <see cref="ClipboardReplaceEnabled"/>,
-    /// <see cref="UiaAssistEnabled"/>).
+    /// <see cref="UiaAssistEnabled"/>, <see cref="AsYouTypeEnabled"/>).
+    /// <see cref="DebounceMilliseconds"/> is included (engine-relevant); the as-you-type
+    /// toggle itself stays shell-only.
     /// </summary>
     public BispellSettings ToNative()
     {
@@ -103,6 +113,7 @@ public sealed class AppUserSettings
         GlobalHotkeyEnabled = GlobalHotkeyEnabled,
         ClipboardReplaceEnabled = ClipboardReplaceEnabled,
         UiaAssistEnabled = UiaAssistEnabled,
+        AsYouTypeEnabled = AsYouTypeEnabled,
     };
 }
 
