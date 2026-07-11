@@ -34,6 +34,10 @@ namespace BiSpell;
 /// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
 /// ListIgnoredWords; mutations via RemoveFromDictionary / UnignoreWord. Refresh after
 /// add/ignore/remove/unignore and after engine init. No ignore-in-app editor; no new Window.
+///
+/// Probe (P3-PROBE): “Probe focused control” calls <see cref="UiaTextAccess.TryProbeFocused"/>
+/// on the UI thread; status line + CrashLog only (no modal). Disabled in smoke and when
+/// the engine is offline. Soft-fail; never hangs launch.
 /// </summary>
 public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 {
@@ -50,6 +54,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
     /// <summary>UIA-first + clipboard utility orchestrator (owns re-entrancy + path policy).</summary>
     private readonly UtilityHotkeyOrchestrator _utilityOrchestrator;
+
+    /// <summary>Shared soft-fail UIA facade for the probe button (COM cache inside).</summary>
+    private readonly UiaTextAccess _uiaProbe = new();
 
     public MainWindow()
     {
@@ -73,6 +80,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         WireSettingsHandlers();
         _suppressSettingsEvents = false;
         CrashLog.Write("MainWindow ctor: settings loaded + handlers wired");
+
+        // P3-PROBE: start disabled until engine is ready (and stay off in smoke).
+        UpdateProbeButtonEnabled();
 
         // Defer native engine load so a missing VC++ runtime / DLL cannot kill the window before paint.
         // Engine failures are non-fatal for window startup (status already ok after Activate).
@@ -361,6 +371,74 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     public void HandleUtilityHotkey() => _utilityOrchestrator.HandleUtilityHotkey();
 
     /// <summary>
+    /// P3-PROBE: soft-fail UIA probe of the currently focused control. Status + CrashLog only.
+    /// Safe if BiSpell itself is focused (reports own=1). No modal; never throws to UI.
+    /// </summary>
+    private void ProbeFocusedButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (CrashLog.IsSmokeMode)
+            {
+                const string smokeMsg = "Probe: skipped (smoke mode / BISPELL_SMOKE).";
+                CrashLog.Write("probe: " + smokeMsg);
+                SetStatus(smokeMsg, CountFromList());
+                return;
+            }
+
+            if (_engine is null)
+            {
+                const string offline = "Probe: engine offline — load dictionaries / bispell_core.dll first.";
+                CrashLog.Write("probe: " + offline);
+                SetStatus(offline, CountFromList());
+                return;
+            }
+
+            UiaFocusSnapshot? snap = _uiaProbe.TryProbeFocused();
+            if (snap is null)
+            {
+                const string none = "Probe: no snapshot (UIA unavailable or soft-fail).";
+                CrashLog.Write("probe: " + none);
+                SetStatus(none, CountFromList());
+                return;
+            }
+
+            string line = snap.ToStatusLine();
+            CrashLog.Write("probe: " + line);
+            // Value length only (never dump password / full field content to status).
+            string valueHint = snap.IsPassword
+                ? "value=(refused)"
+                : snap.CanReadValue
+                    ? $"valueLen={(snap.Value?.Length ?? 0)}"
+                    : "value=(n/a)";
+            SetStatus($"Probe: {line} {valueHint}", CountFromList());
+        }
+        catch (Exception ex)
+        {
+            // Defensive: UiaTextAccess never throws; still guard UI path.
+            CrashLog.Write("probe: unexpected " + ex.GetType().Name + ": " + ex.Message);
+            try { SetStatus("Probe failed (soft): " + ex.Message, CountFromList()); }
+            catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>
+    /// Enable probe when engine is loaded and not in smoke mode; otherwise disabled.
+    /// </summary>
+    private void UpdateProbeButtonEnabled()
+    {
+        if (ProbeFocusedButton is null) return;
+        try
+        {
+            ProbeFocusedButton.IsEnabled = _engine is not null && !CrashLog.IsSmokeMode;
+        }
+        catch
+        {
+            // Button enable is cosmetic for smoke safety.
+        }
+    }
+
+    /// <summary>
     /// Backward-compatible alias for <see cref="HandleUtilityHotkey"/> (Phase 2 name).
     /// </summary>
     public void HandleClipboardUtilityHotkey() => HandleUtilityHotkey();
@@ -518,6 +596,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                     "See windows/README.md for packaging steps.");
                 SetStatus("Engine not loaded — missing dictionaries.", 0);
                 RefreshLexiconLists();
+                UpdateProbeButtonEnabled();
                 return;
             }
 
@@ -533,6 +612,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                     $"tr.dic present: {File.Exists(tr)}");
                 SetStatus("Engine not loaded — incomplete dictionary folder.", 0);
                 RefreshLexiconLists();
+                UpdateProbeButtonEnabled();
                 return;
             }
 
@@ -555,6 +635,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             _engine = BispellEngine.Create(dictDir, _lexiconPath, settings);
             ErrorBar.IsOpen = false;
             RefreshLexiconLists();
+            UpdateProbeButtonEnabled();
 
             var settingsHint = AppPaths.SettingsPath;
             SetStatus(
@@ -574,6 +655,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 ex.Message);
             SetStatus("Engine not loaded — bispell_core.dll missing.", 0);
             RefreshLexiconLists();
+            UpdateProbeButtonEnabled();
         }
         catch (BadImageFormatException ex)
         {
@@ -583,12 +665,14 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 "Rebuild the DLL for the same platform as the app.\n\n" + ex.Message);
             SetStatus("Engine not loaded — bad image format.", 0);
             RefreshLexiconLists();
+            UpdateProbeButtonEnabled();
         }
         catch (BispellException ex)
         {
             ShowError("Failed to load spell engine", ex.Message);
             SetStatus("Engine not loaded — see error bar.", 0);
             RefreshLexiconLists();
+            UpdateProbeButtonEnabled();
         }
         catch (Exception ex)
         {
@@ -596,6 +680,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             ShowError("Unexpected startup error", ex.Message);
             SetStatus("Engine not loaded — unexpected error.", 0);
             RefreshLexiconLists();
+            UpdateProbeButtonEnabled();
         }
     }
 

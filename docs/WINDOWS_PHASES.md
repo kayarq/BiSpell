@@ -2,7 +2,7 @@
 
 Checklist for the fork-friendly Windows path under [`windows/`](../windows/). macOS delivery remains in [`PHASES.md`](PHASES.md) and is **unchanged**.
 
-**MVP “done”** = U1–U5 + U7 complete. **U6** (UI Automation probe) is optional stretch and is **not** required for MVP.
+**MVP “done”** = U1–U5 + U7 complete. **Phase 2** (clipboard hotkey) and **Phase 3** (UIA assist) are post-MVP product utilities. Historical **U6** (UIA probe research) is **subsumed** by Phase 3 hotkey UIA — not continuous monitoring.
 
 | Unit | Title | Status | Notes |
 |------|--------|--------|--------|
@@ -11,8 +11,10 @@ Checklist for the fork-friendly Windows path under [`windows/`](../windows/). ma
 | **U3** | SpellEngine, language heuristics, lexicon, settings | ✅ | C ABI (`c_api.h`); lexicon under AppData / injectable paths |
 | **U4** | WinUI 3 shell — check / suggest / apply | ✅ | C# WinUI 3 + P/Invoke; unpackaged F5 |
 | **U5** | Settings persistence, tray, Windows paths | ✅ | `settings.json`, tray show/quit, hide-to-tray |
-| **U6** | UI Automation probe (system-wide feasibility) | ⬜ optional | Post-MVP research; not a product gate |
+| **U6** | UI Automation (historical optional probe) | ✅ subsumed | Phase 3 productizes hotkey ValuePattern UIA + probe button (not always-on overlay) |
 | **U7** | Integration glue, dictionary packaging, CI notes | ✅ | Docs finalize, SoT note, Linux CI workflow, CMake top-level |
+| **P2** | Global hotkey + clipboard batch fix | ✅ | Ctrl+Alt+. / Win+Shift+.; `BISPELL_SMOKE` skips hotkey |
+| **P3** | UIA assist + UIA-first hotkey + tiers A/B/C + probe | ✅ | `uiaAssistEnabled`; soft-fail COM; smoke skips UIA + hotkey |
 
 ## MVP acceptance matrix
 
@@ -75,6 +77,15 @@ Dictionaries: copied from SoT by the csproj into output `Dictionaries\`. Optiona
 
 Full detail: [`windows/README.md`](../windows/README.md), [`docs/WINDOWS.md`](WINDOWS.md).
 
+### Phase 2 / 3 utility checklist (Windows host)
+
+1. Settings: **Global hotkey**, **Clipboard replace**, **UIA assist** (all default on; keys `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled`).
+2. **Tier A (Notepad):** focus edit with `I recieve mail. merhabaa dünya` → hotkey → in-place fix when replace on.
+3. **UIA off:** uncheck UIA assist → copy text → hotkey → clipboard fixed (Phase 2).
+4. **Tier C:** apps without ValuePattern still work via copy → hotkey → paste.
+5. **Probe focused control:** status + CrashLog show `tier=` / read/write; no modal.
+6. **Smoke:** `BISPELL_SMOKE=1` launch OK; no hotkey register; UIA paths soft no-op (no hang).
+
 ## macOS (unchanged)
 
 ```bash
@@ -121,7 +132,7 @@ There is **no** required Windows runner for MVP gate. Documented manual checklis
 ## Explicit non-goals (still)
 
 - Notes / templates / locks / taxonomy / markdown library
-- System-wide UI Automation overlay (U6 probe only if pursued later)
+- Continuous system-wide UI Automation monitoring or overlay underlines (Phase 3 is **hotkey-triggered** ValuePattern only)
 - WPF / WinForms full UI port (tray may use WinForms `NotifyIcon` only)
 - Full libhunspell affix engine
 - Deleting Swift or dual-maintaining divergent dictionary blobs

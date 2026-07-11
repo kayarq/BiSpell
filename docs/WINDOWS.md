@@ -20,7 +20,7 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │  tests/ ctest on Linux + Windows                            │
 │  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
 │         Check │ Suggest │ Apply │ Tray │ Settings           │
-│         Global hotkey (Ctrl+Alt+.) │ Clipboard utility      │
+│         Global hotkey (Ctrl+Alt+.) │ UIA assist + Clipboard │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,13 +53,14 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
 3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage** (remove / unignore), **min word length**, **persistent settings**, **system tray** (show / quit).
-4. **Phase 2 clipboard utility:** global hotkey (**Ctrl+Alt+.**, fallback **Win+Shift+.**), optional **clipboard replace** after top-suggestion apply, shell toggles in settings (no system-wide UIA injection).
-5. Docs and CMake so core tests run on Linux; app builds on a Windows host.
+4. **Phase 2 clipboard utility:** global hotkey (**Ctrl+Alt+.**, fallback **Win+Shift+.**), optional **clipboard replace** after top-suggestion apply, shell toggles in settings.
+5. **Phase 3 UIA assist:** on the same hotkey, prefer **focused-control ValuePattern** read/write when possible (Tier A/B), else Phase 2 clipboard (Tier C). Settings: `uiaAssistEnabled` (default true). Optional **Probe focused control** button. **Not** continuous monitoring / overlay underlines.
+6. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
 
 - Notes window, templates, locks, taxonomy, markdown library, terminal themes.
-- System-wide Accessibility / UI Automation overlay in other apps (optional probe only later).
+- Continuous system-wide Accessibility / UI Automation monitoring or overlay underlines in other apps (hotkey-triggered ValuePattern assist is in Phase 3; always-on is not).
 - WPF / WinForms / full SwiftUI-in-C# clone of the macOS UI.
 - Full libhunspell affix engine (unless proven drop-in superior without breaking parity tests).
 - macOS `SystemSpellSuggester` / `NSSpellChecker` equivalent on Windows MVP.
@@ -162,7 +163,7 @@ swift build -c release
 
 | File | Role |
 |------|------|
-| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled` (default true). Loaded at startup; saved when toggles change. |
+| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled` (all three default **true** when missing). Loaded at startup; saved when toggles change. |
 | `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
 
 Full path examples (per-user profile):
@@ -214,22 +215,22 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 - Menu: **Show BiSpell** (activate main window), **Quit** (dispose tray + exit).
 - Double-click tray icon = show window.
 - Closing the main window **hides to tray** (does not quit); use **Quit** to exit cleanly.
-- Tray **balloon** (or tip fallback) reports clipboard-utility results (Phase 2).
-- Still **no** system-wide other-app injection / UI Automation overlay (out of MVP; optional later probe only). Clipboard utility is **copy → hotkey → paste**, not in-place UIA rewrite of foreign apps.
+- Tray **balloon** (or tip fallback) reports utility results (Phase 2/3 — path `UIA` or `clipboard`).
+- Phase 3 adds **hotkey-triggered** focused-control UIA (ValuePattern), not continuous multi-app monitoring or overlay underlines.
 
 ### Phase 2 — global hotkey & clipboard utility
 
-Shell-only feature (not part of the native C ABI). Uses Win32 `RegisterHotKey` on a message-only HWND and `CF_UNICODETEXT` clipboard read/write.
+Shell-only feature (not part of the native C ABI). Uses Win32 `RegisterHotKey` on a message-only HWND and `CF_UNICODETEXT` clipboard read/write. Still the **fallback** path for Phase 3 Tier C / UIA-off.
 
 | Piece | Behavior |
 |-------|----------|
 | **Primary hotkey** | **Ctrl+Alt+.** (`MOD_CONTROL\|MOD_ALT`, `VK_OEM_PERIOD`) |
 | **Fallback** | **Win+Shift+.** if primary registration fails |
 | **Global hotkey** checkbox | Default on; toggle re-registers / unregisters **without restart** |
-| **Clipboard replace** checkbox | Default on; when off, check + feedback only (clipboard not overwritten) |
+| **Clipboard replace** checkbox | Default on; when off, check + feedback only (clipboard not overwritten); also gates UIA SetValue auto-apply in Phase 3 |
 | Settings JSON | `globalHotkeyEnabled`, `clipboardReplaceEnabled` (missing keys → true) |
 
-**How to use**
+**How to use (clipboard-only / Phase 2)**
 
 1. **Copy** text with typos from any app.
 2. Press the registered combo (**Ctrl+Alt+.** or the caption’s fallback).
@@ -238,11 +239,47 @@ Shell-only feature (not part of the native C ABI). Uses Win32 `RegisterHotKey` o
 
 Caption under the settings toggles shows the live binding or a reason it is off / unavailable / skipped in smoke.
 
-**Headless smoke:** `windows/app/scripts/smoke-launch.ps1` sets **`BISPELL_SMOKE=1`** before launch. The app then **skips hotkey registration** (and MessageBox) so GHA `smoke-windows-x64` never depends on interactive hotkeys or blocks on modals. Manual hotkey E2E remains a Windows-host checklist item only.
+**Headless smoke:** `windows/app/scripts/smoke-launch.ps1` sets **`BISPELL_SMOKE=1`** before launch. The app then **skips hotkey registration**, **skips UIA COM** on utility/probe paths, and skips MessageBox so GHA `smoke-windows-x64` never depends on interactive hotkeys/UIA or blocks on modals. Manual hotkey / UIA E2E remains a Windows-host checklist item only.
+
+### Phase 3 — UIA assist (focused control)
+
+On the **same global hotkey**, when **`uiaAssistEnabled`** is true (default), BiSpell tries **UI Automation** on the focused control **before** the Phase 2 clipboard path.
+
+| Piece | Behavior |
+|-------|----------|
+| **UIA assist** checkbox | Default on; when off → pure Phase 2 clipboard |
+| Pattern MVP | **ValuePattern** read (`CurrentValue`) + write (`SetValue`) |
+| Replace policy | Same as Phase 2: apply all top suggestions via `ClipboardSpellFix`; no-suggestion words left alone |
+| Settings JSON | `uiaAssistEnabled` (missing key → true) |
+| Probe button | **Probe focused control** — status + CrashLog tier/control/process; no modal; disabled in smoke / engine offline |
+
+#### Support tiers (A / B / C)
+
+| Tier | Capability | Examples | Hotkey outcome |
+|------|------------|----------|----------------|
+| **A** | ValuePattern **read + write** | Classic Notepad, many Win32 `EDIT` | In-place correction when auto-apply (Clipboard replace) is on; clipboard often untouched |
+| **B** | ValuePattern **read only** (or SetValue fails) | Some restricted / rich fields | Spell after UIA read; write via **clipboard** if replace on |
+| **C** | No access | Many Chromium/Electron fields, elevated apps, password, no focus / COM fail | **Identical** Phase 2 clipboard path |
+
+#### Manual Notepad test (Tier A)
+
+1. Enable **Global hotkey**, **UIA assist**, **Clipboard replace**.
+2. Open Notepad, type: `I recieve mail. merhabaa dünya`
+3. Keep caret in Notepad; press **Ctrl+Alt+.** (or registered fallback).
+4. Expect in-place fix (`receive`, `merhaba`); status/tray mention UIA path and counts.
+5. Optional: click **Probe focused control** after focusing a control — status shows `tier=A|B|C`, read/write flags, process.
+
+#### Permissions / limitations
+
+- No admin required for same-integrity desktop apps.
+- Elevated targets / hostile providers → soft-fail → Tier C / clipboard.
+- Password fields (`IsPassword`) refused (no read/write).
+- Self-focus (BiSpell process): orchestrator avoids fighting own controls (editor text or clipboard).
+- **Not** always-on underlines; **not** a full Accessibility overlay product.
 
 ## Status
 
-**Windows MVP (U1–U5 + U7) is integration-complete in-tree; Phase 2 clipboard utility is in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
+**Windows MVP (U1–U5 + U7) + Phase 2 + Phase 3 UIA assist are integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
 
 | Layer | State |
 |-------|--------|
@@ -251,10 +288,11 @@ Caption under the settings toggles shows the live binding or a reason it is off 
 | Settings + tray + AppData | ✅ U5 |
 | Phase 1: min word length + lexicon manage (remove/unignore) | ✅ P1-SETTINGS / P1-LEXUI |
 | Phase 2: global hotkey + clipboard replace + GLUE | ✅ P2-SETTINGS / P2-HOTKEY / P2-CLIP / P2-GLUE (`BISPELL_SMOKE` skips hotkey) |
+| Phase 3: UIA assist + UIA-first hotkey + tiers + probe | ✅ P3-SETTINGS / P3-UIA / P3-GLUE / P3-PROBE (`BISPELL_SMOKE` skips UIA + hotkey) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
-| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` |
+| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.7) |
 | macOS Swift product | ✅ Unchanged |
-| U6 UIA probe | ⬜ Optional post-MVP |
+| U6 UIA probe (historical optional research) | ✅ **Subsumed** by Phase 3 hotkey UIA (not continuous monitoring) |
 
 **Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK.

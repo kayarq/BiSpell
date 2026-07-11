@@ -20,12 +20,16 @@ BiSpell.App/
     BispellEngine.cs     ← managed RAII wrapper + result marshaling
     NativeString.cs      ← UTF-8 helpers
   Services/
-    AppPaths.cs          ← %APPDATA%\BiSpell\ paths
-    SettingsStore.cs     ← settings.json load/save
-    TrayIconService.cs   ← WinForms NotifyIcon (show / quit)
+    AppPaths.cs                 ← %APPDATA%\BiSpell\ paths
+    SettingsStore.cs            ← settings.json load/save
+    TrayIconService.cs          ← WinForms NotifyIcon (show / quit)
+    GlobalHotkeyService.cs      ← Win32 RegisterHotKey
+    Win32ClipboardText.cs       ← CF_UNICODETEXT read/write
+    UiaTextAccess.cs            ← soft-fail ValuePattern probe/read/write
+    UtilityHotkeyOrchestrator.cs← UIA-first + clipboard fallback
   Models/MisspellingItem.cs
-  MainWindow.xaml(.cs)   ← check / list / suggest / apply / add / ignore / settings
-  App.xaml(.cs)          ← tray lifecycle (hide-to-tray, Quit)
+  MainWindow.xaml(.cs)   ← check / list / suggest / apply / settings / probe
+  App.xaml(.cs)          ← tray + hotkey lifecycle
 native/                  ← staged bispell_core.dll
 scripts/                 ← build-native, stage-dictionaries
 ```
