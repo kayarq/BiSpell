@@ -13,7 +13,7 @@
     <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>false</UseWPF>
     <WinUISDKReferences>false</WinUISDKReferences>
-    <EnableMsixTooling>false</EnableMsixTooling>
+    <EnableMsixTooling>true</EnableMsixTooling>
     <!-- Unpackaged local dev (F5 without MSIX). See windows/README.md -->
     <WindowsPackageType>None</WindowsPackageType>
     <!-- Bundle WASDK DLLs into publish output; do NOT require a machine-wide install. -->

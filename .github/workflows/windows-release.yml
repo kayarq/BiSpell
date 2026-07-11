@@ -14,7 +14,7 @@ on:
       version:
         description: "Release version label (e.g. 0.1.0)"
         required: true
-        default: "0.1.2"
+        default: "0.1.3"
       create_release:
         description: "Create/update GitHub Release and attach zip"
         type: boolean
@@ -71,28 +71,54 @@ jobs:
           $ErrorActionPreference = "Stop"
           $out = "dist/BiSpell-win-x64"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $pub = Join-Path (Get-Location) $out
+          $pub = [System.IO.Path]::GetFullPath($pub)
+          New-Item -ItemType Directory -Force -Path $pub | Out-Null
           Push-Location windows/app
           try {
-            dotnet publish BiSpell.App/BiSpell.App.csproj `
-              -c Release `
-              -r win-x64 `
+            $proj = "BiSpell.App/BiSpell.App.csproj"
+            $commonProps = @(
+              "-p:Configuration=Release",
+              "-p:Platform=x64",
+              "-p:RuntimeIdentifier=win-x64",
+              "-p:WindowsPackageType=None",
+              "-p:WindowsAppSDKSelfContained=true",
+              "-p:WindowsAppSdkBootstrapInitialize=false",
+              "-p:WindowsAppSdkUndockedRegFreeWinRTInitialize=true",
+              "-p:SelfContained=true",
+              "-p:PublishReadyToRun=false",
+              "-p:PublishDir=$pub\"
+            )
+            Write-Host "dotnet publish -> $pub"
+            & dotnet publish $proj -c Release -r win-x64 --self-contained true `
               -p:Platform=x64 `
               -p:WindowsPackageType=None `
               -p:WindowsAppSDKSelfContained=true `
               -p:WindowsAppSdkBootstrapInitialize=false `
               -p:WindowsAppSdkUndockedRegFreeWinRTInitialize=true `
+              -p:EnableMsixTooling=true `
               -p:PublishReadyToRun=false `
-              --self-contained true `
-              -o (Join-Path (Get-Location) "../../$out")
-            # Sanity: bootstrap auto-init must not be forced; self-contained markers should exist
-            $pub = Join-Path (Get-Location) "../../$out"
-            if (-not (Test-Path (Join-Path $pub "Microsoft.ui.xaml.dll"))) {
-              throw "Publish output missing Microsoft.ui.xaml.dll — self-contained WASDK incomplete"
+              -o $pub
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "dotnet publish failed ($LASTEXITCODE); trying MSBuild Publish target"
+              $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+                -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" |
+                Select-Object -First 1
+              if (-not $msbuild) { throw "MSBuild not found after dotnet publish failed" }
+              & $msbuild $proj /t:Restore,Publish /p:Configuration=Release /p:Platform=x64 `
+                /p:RuntimeIdentifier=win-x64 /p:WindowsPackageType=None `
+                /p:WindowsAppSDKSelfContained=true /p:WindowsAppSdkBootstrapInitialize=false `
+                /p:WindowsAppSdkUndockedRegFreeWinRTInitialize=true /p:SelfContained=true `
+                /p:EnableMsixTooling=true /p:PublishDir="$pub\"
+              if ($LASTEXITCODE -ne 0) { throw "MSBuild Publish failed" }
             }
-            if (-not (Test-Path (Join-Path $pub "Microsoft.WindowsAppRuntime.dll"))) {
-              throw "Publish output missing Microsoft.WindowsAppRuntime.dll"
-            }
-            Write-Host "Self-contained WASDK files present under $pub"
+            $xaml = Get-ChildItem -Path $pub -Filter "Microsoft.ui.xaml.dll" -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            $war = Get-ChildItem -Path $pub -Filter "Microsoft.WindowsAppRuntime.dll" -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if (-not $xaml) { throw "Publish output missing Microsoft.ui.xaml.dll under $pub" }
+            if (-not $war) { throw "Publish output missing Microsoft.WindowsAppRuntime.dll under $pub" }
+            Write-Host "Self-contained WASDK OK: $($xaml.FullName)"
           } finally {
             Pop-Location
           }
