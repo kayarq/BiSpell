@@ -15,7 +15,8 @@ This tree hosts a portable C++ spell core (algorithm parity with Swift `BiSpellC
 | UI shell | **C# WinUI 3** (Windows App SDK) | **Product path** — unpackaged F5; XAML ergonomics |
 | Dictionaries | Same `.dic` / `.aff` as macOS | **SoT:** `Sources/BiSpellCore/Resources/Dictionaries/` |
 | User data | `%APPDATA%\BiSpell\` | `settings.json`, `user-lexicon.json` |
-| Tray | WinForms `NotifyIcon` | Show window / Quit (unpackaged) |
+| Tray | WinForms `NotifyIcon` | Show window / Quit (unpackaged); balloon on clipboard utility |
+| Global hotkey | Win32 `RegisterHotKey` | **Ctrl+Alt+.** primary; **Win+Shift+.** fallback; clipboard spell utility |
 
 **Future alternative (not dual product path):** a C++/WinRT shell could static-link `bispell_core` in one MSBuild solution later. Keep a single app tree under `windows/app/` (C# today); do not maintain a parallel incomplete C++/WinRT product.
 
@@ -182,7 +183,7 @@ Linux CI / orchestrator does **not** build WinUI.
 8. Toggle **Spell-check enabled** / TR/EN / **Max suggestions** / **Min word length**; re-check. Quit and relaunch → settings still applied.
 9. Tray icon: right-click → **Show BiSpell** / **Quit**. Closing the window hides to tray (not exit).
 
-### Settings (Phase 1)
+### Settings (Phase 1 + Phase 2)
 
 Settings card on the main window (persisted to AppData):
 
@@ -192,6 +193,30 @@ Settings card on the main window (persisted to AppData):
 | **Turkish** / **English** | Language dictionaries |
 | **Max suggestions** | Caps suggestion list (1–20) |
 | **Min word length** | Tokens shorter than this are **skipped** on check (1–10, default 2). Raise to reduce noise on short tokens; lower to include 1-letter words. |
+| **Global hotkey** | Shell-only. When on (default), register the clipboard-utility hotkey (no app restart). Off → unregister. |
+| **Clipboard replace** | Shell-only. When on (default), the hotkey **writes** fixed text back to the clipboard after applying top suggestions. Off → check/feedback only (clipboard left unchanged). |
+
+A caption under the utility toggles shows the **active binding** (e.g. `Ctrl+Alt+.`) or why registration failed / was skipped.
+
+### Clipboard utility hotkey (Phase 2)
+
+System-wide hotkey that spell-checks **clipboard text** (UTF-16 / `CF_UNICODETEXT`) without focusing the main editor first.
+
+| Binding | Role |
+|---------|------|
+| **Ctrl+Alt+.** | Primary |
+| **Win+Shift+.** | Fallback if primary `RegisterHotKey` fails (another app owns the combo) |
+
+**How to use**
+
+1. **Copy** text that has typos (any app → Ctrl+C / Copy).
+2. Press the **global hotkey** (**Ctrl+Alt+.**, or **Win+Shift+.** if that is what registered).
+3. BiSpell checks the clipboard with current TR/EN / settings, applies top suggestions, and — if **Clipboard replace** is on — writes the fixed text back.
+4. **Paste** (Ctrl+V) where you want the corrected text.
+
+Feedback: status line + tray balloon (e.g. `Fixed N word(s)`). Empty clipboard, spell-check off, or zero misspellings get a short status/balloon and no write.
+
+**Smoke / CI:** when `BISPELL_SMOKE=1` (set by `windows/app/scripts/smoke-launch.ps1` for GHA and local zip smoke), the app **never registers** the hotkey and skips MessageBox modals so headless launch cannot hang. Manual hotkey E2E is for interactive Windows only.
 
 ### Lexicon manage UI (Phase 1)
 
@@ -208,7 +233,7 @@ Remove / Unignore refresh the lists and re-run check immediately. File-backed le
 
 | Path | Contents |
 |------|----------|
-| `%APPDATA%\BiSpell\settings.json` | `isEnabled`, TR/EN, `maxSuggestions`, `minWordLength`, `debounceMilliseconds` |
+| `%APPDATA%\BiSpell\settings.json` | `isEnabled`, TR/EN, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`, plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled` |
 | `%APPDATA%\BiSpell\user-lexicon.json` | Personal dictionary (`addedWords`) + ignore list (`ignoredWords`) |
 
 - **Settings relaunch:** change Min word length / languages → quit → relaunch → UI and check behavior match.
@@ -226,8 +251,9 @@ Full steps: [`docs/WINDOWS.md`](../docs/WINDOWS.md) → *User data* / *Persisten
 
 | Key | Action |
 |-----|--------|
-| **F7** | Run spell-check |
+| **F7** | Run spell-check on the main editor |
 | **Enter** | Apply selected (or top) suggestion when focus is not in the editor |
+| **Ctrl+Alt+.** (or **Win+Shift+.** fallback) | Global: clipboard spell utility (Phase 2; disabled in smoke) |
 
 ### Interop contract
 
@@ -260,6 +286,7 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 | U4 | C# WinUI 3 + P/Invoke, dictionary packaging, unpackaged F5 |
 | U5 | Settings persistence, tray show/quit, AppData paths |
 | U7 | Docs finalize, SoT note, CMake top-level, `.github/workflows/windows-core.yml` |
+| Phase 2 | Global hotkey + clipboard batch fix + settings toggles (P2-HOTKEY / P2-CLIP / P2-SETTINGS / P2-GLUE) |
 | U6 | Optional UIA probe — **not** MVP |
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units** (see `windows/core/include/bispell/encoding.hpp`).

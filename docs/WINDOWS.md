@@ -19,7 +19,8 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │         LanguageTagger (heuristics) │ UserLexicon │ Settings │
 │  tests/ ctest on Linux + Windows                            │
 │  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
-│         Check text │ Suggestions │ Apply │ Tray │ Settings  │
+│         Check │ Suggest │ Apply │ Tray │ Settings           │
+│         Global hotkey (Ctrl+Alt+.) │ Clipboard utility      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,7 +53,8 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
 3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage** (remove / unignore), **min word length**, **persistent settings**, **system tray** (show / quit).
-4. Docs and CMake so core tests run on Linux; app builds on a Windows host.
+4. **Phase 2 clipboard utility:** global hotkey (**Ctrl+Alt+.**, fallback **Win+Shift+.**), optional **clipboard replace** after top-suggestion apply, shell toggles in settings (no system-wide UIA injection).
+5. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
 
@@ -160,7 +162,7 @@ swift build -c release
 
 | File | Role |
 |------|------|
-| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`). Loaded at startup; saved when toggles change. |
+| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled` (default true). Loaded at startup; saved when toggles change. |
 | `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
 
 Full path examples (per-user profile):
@@ -212,11 +214,35 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 - Menu: **Show BiSpell** (activate main window), **Quit** (dispose tray + exit).
 - Double-click tray icon = show window.
 - Closing the main window **hides to tray** (does not quit); use **Quit** to exit cleanly.
-- Still **no** system-wide other-app injection / UI Automation overlay (out of MVP; optional later probe only).
+- Tray **balloon** (or tip fallback) reports clipboard-utility results (Phase 2).
+- Still **no** system-wide other-app injection / UI Automation overlay (out of MVP; optional later probe only). Clipboard utility is **copy → hotkey → paste**, not in-place UIA rewrite of foreign apps.
+
+### Phase 2 — global hotkey & clipboard utility
+
+Shell-only feature (not part of the native C ABI). Uses Win32 `RegisterHotKey` on a message-only HWND and `CF_UNICODETEXT` clipboard read/write.
+
+| Piece | Behavior |
+|-------|----------|
+| **Primary hotkey** | **Ctrl+Alt+.** (`MOD_CONTROL\|MOD_ALT`, `VK_OEM_PERIOD`) |
+| **Fallback** | **Win+Shift+.** if primary registration fails |
+| **Global hotkey** checkbox | Default on; toggle re-registers / unregisters **without restart** |
+| **Clipboard replace** checkbox | Default on; when off, check + feedback only (clipboard not overwritten) |
+| Settings JSON | `globalHotkeyEnabled`, `clipboardReplaceEnabled` (missing keys → true) |
+
+**How to use**
+
+1. **Copy** text with typos from any app.
+2. Press the registered combo (**Ctrl+Alt+.** or the caption’s fallback).
+3. BiSpell runs the full-field check with current languages/settings, applies top suggestions per misspelling, and (if replace is on) writes fixed text to the clipboard.
+4. **Paste** the corrected text.
+
+Caption under the settings toggles shows the live binding or a reason it is off / unavailable / skipped in smoke.
+
+**Headless smoke:** `windows/app/scripts/smoke-launch.ps1` sets **`BISPELL_SMOKE=1`** before launch. The app then **skips hotkey registration** (and MessageBox) so GHA `smoke-windows-x64` never depends on interactive hotkeys or blocks on modals. Manual hotkey E2E remains a Windows-host checklist item only.
 
 ## Status
 
-**Windows MVP (U1–U5 + U7) is integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
+**Windows MVP (U1–U5 + U7) is integration-complete in-tree; Phase 2 clipboard utility is in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
 
 | Layer | State |
 |-------|--------|
@@ -224,6 +250,7 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 | C# WinUI 3 shell (check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
 | Settings + tray + AppData | ✅ U5 |
 | Phase 1: min word length + lexicon manage (remove/unignore) | ✅ P1-SETTINGS / P1-LEXUI |
+| Phase 2: global hotkey + clipboard replace + GLUE | ✅ P2-SETTINGS / P2-HOTKEY / P2-CLIP / P2-GLUE (`BISPELL_SMOKE` skips hotkey) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
 | Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` |
