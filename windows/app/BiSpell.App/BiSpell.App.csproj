@@ -13,9 +13,10 @@
     <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>false</UseWPF>
     <WinUISDKReferences>false</WinUISDKReferences>
-    <EnableMsixTooling>true</EnableMsixTooling>
+    <EnableMsixTooling>false</EnableMsixTooling>
     <!-- Unpackaged local dev (F5 without MSIX). See windows/README.md -->
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- Bundle WASDK DLLs into publish output; do NOT require a machine-wide install. -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <Nullable>enable</Nullable>
     <!-- Prefer x64 for native bispell_core.dll interop -->
@@ -30,7 +31,10 @@
     <ApplicationId>com.bispell.windows</ApplicationId>
     <!-- Custom Program.cs with crash logging -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
+    <!-- CRITICAL: bootstrap=true looks for the *installed* MSIX runtime and shows
+         "This application requires the Windows App Runtime" even when self-contained
+         DLLs are next to the exe. false + UndockedRegFreeWinRT uses local files. -->
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
     <WindowsAppSdkUndockedRegFreeWinRTInitialize>true</WindowsAppSdkUndockedRegFreeWinRTInitialize>
   </PropertyGroup>
 

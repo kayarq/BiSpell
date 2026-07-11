@@ -14,7 +14,7 @@ on:
       version:
         description: "Release version label (e.g. 0.1.0)"
         required: true
-        default: "0.1.1"
+        default: "0.1.2"
       create_release:
         description: "Create/update GitHub Release and attach zip"
         type: boolean
@@ -79,9 +79,20 @@ jobs:
               -p:Platform=x64 `
               -p:WindowsPackageType=None `
               -p:WindowsAppSDKSelfContained=true `
+              -p:WindowsAppSdkBootstrapInitialize=false `
+              -p:WindowsAppSdkUndockedRegFreeWinRTInitialize=true `
               -p:PublishReadyToRun=false `
               --self-contained true `
               -o (Join-Path (Get-Location) "../../$out")
+            # Sanity: bootstrap auto-init must not be forced; self-contained markers should exist
+            $pub = Join-Path (Get-Location) "../../$out"
+            if (-not (Test-Path (Join-Path $pub "Microsoft.ui.xaml.dll"))) {
+              throw "Publish output missing Microsoft.ui.xaml.dll — self-contained WASDK incomplete"
+            }
+            if (-not (Test-Path (Join-Path $pub "Microsoft.WindowsAppRuntime.dll"))) {
+              throw "Publish output missing Microsoft.WindowsAppRuntime.dll"
+            }
+            Write-Host "Self-contained WASDK files present under $pub"
           } finally {
             Pop-Location
           }
@@ -182,7 +193,7 @@ jobs:
           body: |
             ## BiSpell for Windows (MVP)
 
-            Unzip and run **`BiSpell.App.exe`**. No Visual Studio or CMake install required on your PC.
+            Unzip and run **`Run-BiSpell.cmd`** (or `BiSpell.App.exe`). Self-contained Windows App SDK — **no** separate Windows App Runtime install required. No Visual Studio/CMake on your PC.
 
             | | |
             |--|--|
