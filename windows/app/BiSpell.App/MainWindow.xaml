@@ -94,14 +94,15 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- Row 3: clipboard utility (shell-only; P2-SETTINGS).
+                    <!-- Row 3: hotkey utility (shell-only; P2-SETTINGS + P3-SETTINGS).
                          No IsChecked / Checked / Unchecked in XAML (W1). -->
-                    <TextBlock Text="Clipboard utility"
+                    <TextBlock Text="Hotkey utility"
                                Style="{StaticResource BodyStrongTextBlockStyle}"
                                Margin="0,4,0,0"/>
                     <StackPanel Orientation="Horizontal" Spacing="16">
                         <CheckBox x:Name="GlobalHotkeyCheck" Content="Global hotkey"/>
                         <CheckBox x:Name="ClipboardReplaceCheck" Content="Clipboard replace"/>
+                        <CheckBox x:Name="UiaAssistCheck" Content="UIA assist"/>
                     </StackPanel>
                     <TextBlock x:Name="HotkeyBindingCaption"
                                Text="Global hotkey: Ctrl+Alt+. (fallback Win+Shift+.) — registers at launch when enabled"

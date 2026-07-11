@@ -16,14 +16,14 @@ namespace BiSpell;
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
 ///
-/// Settings card (P1-SETTINGS Mandate B + W1 + P2-SETTINGS): XAML holds structure only
-/// (no IsChecked / Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox
-/// state + handlers are applied in the ctor after InitializeComponent and
+/// Settings card (P1-SETTINGS Mandate B + W1 + P2-SETTINGS + P3-SETTINGS): XAML holds
+/// structure only (no IsChecked / Checked / Unchecked / Value / ValueChanged). Boolean
+/// and NumberBox state + handlers are applied in the ctor after InitializeComponent and
 /// LoadSettingsIntoUi so handlers never run mid-tree construction (root cause of
 /// ToggleButton.IsChecked assign failure in v0.1.3). Exposes enable / TR / EN /
 /// maxSuggestions / minWordLength plus shell-only globalHotkeyEnabled /
-/// clipboardReplaceEnabled (not native ABI). Path hint under the card title. No debounce
-/// UI.
+/// clipboardReplaceEnabled / uiaAssistEnabled (not native ABI). Path hint under the card
+/// title. No debounce UI.
 ///
 /// Clipboard utility (P2-GLUE): <see cref="HandleClipboardUtilityHotkey"/> is invoked
 /// from App on the UI dispatcher when the global hotkey fires. Uses this window's
@@ -114,6 +114,9 @@ public sealed partial class MainWindow : Window
     /// <summary>Shell setting: write fixed text back to clipboard after utility check.</summary>
     public bool IsClipboardReplaceEnabled => _settings.ClipboardReplaceEnabled;
 
+    /// <summary>Shell setting: try focused-control UIA before clipboard on utility hotkey (P3).</summary>
+    public bool IsUiaAssistEnabled => _settings.UiaAssistEnabled;
+
     /// <summary>
     /// Attach Checked/Unchecked/ValueChanged only after InitializeComponent + LoadSettingsIntoUi.
     /// Idempotent. XAML must not declare these attributes.
@@ -146,7 +149,7 @@ public sealed partial class MainWindow : Window
         if (MinWordLengthBox is not null)
             MinWordLengthBox.ValueChanged += MinWordLengthBox_ValueChanged;
 
-        // P2-SETTINGS: shell-only utility toggles (no engine ApplySettingsToEngine needed).
+        // P2/P3-SETTINGS: shell-only utility toggles (no engine ApplySettingsToEngine needed).
         if (GlobalHotkeyCheck is not null)
         {
             GlobalHotkeyCheck.Checked += UtilitySettings_Changed;
@@ -157,6 +160,12 @@ public sealed partial class MainWindow : Window
         {
             ClipboardReplaceCheck.Checked += UtilitySettings_Changed;
             ClipboardReplaceCheck.Unchecked += UtilitySettings_Changed;
+        }
+
+        if (UiaAssistCheck is not null)
+        {
+            UiaAssistCheck.Checked += UtilitySettings_Changed;
+            UiaAssistCheck.Unchecked += UtilitySettings_Changed;
         }
 
         _settingsHandlersWired = true;
@@ -180,11 +189,13 @@ public sealed partial class MainWindow : Window
             if (MinWordLengthBox is not null)
                 MinWordLengthBox.Value = Math.Clamp(_settings.MinWordLength, 1, 10);
 
-            // Shell-only utility flags (P2-SETTINGS); not pushed to native BispellSettings.
+            // Shell-only utility flags (P2/P3-SETTINGS); not pushed to native BispellSettings.
             if (GlobalHotkeyCheck is not null)
                 GlobalHotkeyCheck.IsChecked = (bool?)_settings.GlobalHotkeyEnabled;
             if (ClipboardReplaceCheck is not null)
                 ClipboardReplaceCheck.IsChecked = (bool?)_settings.ClipboardReplaceEnabled;
+            if (UiaAssistCheck is not null)
+                UiaAssistCheck.IsChecked = (bool?)_settings.UiaAssistEnabled;
 
             // Path hint: concrete settings.json location when AppData is available.
             if (SettingsPathHint is not null)
@@ -230,6 +241,8 @@ public sealed partial class MainWindow : Window
             _settings.GlobalHotkeyEnabled = GlobalHotkeyCheck.IsChecked == true;
         if (ClipboardReplaceCheck is not null)
             _settings.ClipboardReplaceEnabled = ClipboardReplaceCheck.IsChecked == true;
+        if (UiaAssistCheck is not null)
+            _settings.UiaAssistEnabled = UiaAssistCheck.IsChecked == true;
 
         _settings.Normalize();
         _settingsStore.Save(_settings);
@@ -277,9 +290,10 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Shell-only utility toggles (global hotkey / clipboard replace). Persist only;
-    /// do not call <see cref="ApplySettingsToEngine"/> (flags are not in BispellSettings).
+    /// Shell-only utility toggles (global hotkey / clipboard replace / UIA assist). Persist
+    /// only; do not call <see cref="ApplySettingsToEngine"/> (flags are not in BispellSettings).
     /// Hotkey register/unregister via <see cref="App.SyncGlobalHotkeyFromSettings"/> (no restart).
+    /// UIA assist is read at hotkey time (P3-GLUE); no COM registration here.
     /// </summary>
     private void UtilitySettings_Changed(object sender, RoutedEventArgs e)
     {
@@ -299,7 +313,8 @@ public sealed partial class MainWindow : Window
 
         SetStatus(
             $"Utility settings saved (hotkey={(_settings.GlobalHotkeyEnabled ? "on" : "off")}, " +
-            $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}).",
+            $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}, " +
+            $"UIA assist={(_settings.UiaAssistEnabled ? "on" : "off")}).",
             CountFromList());
     }
 

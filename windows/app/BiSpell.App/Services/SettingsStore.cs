@@ -45,6 +45,15 @@ public sealed class AppUserSettings
     [JsonPropertyName("clipboardReplaceEnabled")]
     public bool ClipboardReplaceEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Shell-only: when true (default), utility hotkey may try focused-control text via
+    /// UI Automation before falling back to clipboard (P3-SETTINGS / P3-GLUE). Not part of
+    /// <see cref="BispellSettings"/> / native ABI.
+    /// JSON: <c>uiaAssistEnabled</c>. Missing key → default true.
+    /// </summary>
+    [JsonPropertyName("uiaAssistEnabled")]
+    public bool UiaAssistEnabled { get; set; } = true;
+
     public static AppUserSettings CreateDefault() => new();
 
     /// <summary>Clamp values to safe ranges used by the engine UI.</summary>
@@ -66,7 +75,8 @@ public sealed class AppUserSettings
 
     /// <summary>
     /// Native engine settings only. Does <b>not</b> include shell utility flags
-    /// (<see cref="GlobalHotkeyEnabled"/>, <see cref="ClipboardReplaceEnabled"/>).
+    /// (<see cref="GlobalHotkeyEnabled"/>, <see cref="ClipboardReplaceEnabled"/>,
+    /// <see cref="UiaAssistEnabled"/>).
     /// </summary>
     public BispellSettings ToNative()
     {
@@ -92,6 +102,7 @@ public sealed class AppUserSettings
         DebounceMilliseconds = DebounceMilliseconds,
         GlobalHotkeyEnabled = GlobalHotkeyEnabled,
         ClipboardReplaceEnabled = ClipboardReplaceEnabled,
+        UiaAssistEnabled = UiaAssistEnabled,
     };
 }
 
