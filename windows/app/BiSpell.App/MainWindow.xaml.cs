@@ -15,11 +15,12 @@ namespace BiSpell;
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
 ///
-/// Settings toggles (W1 Mandate B): XAML holds structure only (no IsChecked / Checked /
-/// Unchecked / ValueChanged). All boolean state and change handlers are applied in the
-/// ctor after InitializeComponent and LoadSettingsIntoUi so handlers never run mid-tree
-/// construction (root cause of ToggleButton.IsChecked assign failure in v0.1.3).
-/// Kept CheckBox (not ToggleSwitch) for layout parity with the existing MVP strip.
+/// Settings card (P1-SETTINGS Mandate B + W1): XAML holds structure only (no IsChecked /
+/// Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox state + handlers
+/// are applied in the ctor after InitializeComponent and LoadSettingsIntoUi so handlers
+/// never run mid-tree construction (root cause of ToggleButton.IsChecked assign failure
+/// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength; path hint under
+/// the card title. No debounce UI.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -117,6 +118,9 @@ public sealed partial class MainWindow : Window
         if (MaxSuggestionsBox is not null)
             MaxSuggestionsBox.ValueChanged += MaxSuggestionsBox_ValueChanged;
 
+        if (MinWordLengthBox is not null)
+            MinWordLengthBox.ValueChanged += MinWordLengthBox_ValueChanged;
+
         _settingsHandlersWired = true;
     }
 
@@ -135,6 +139,21 @@ public sealed partial class MainWindow : Window
                 EnglishCheck.IsChecked = (bool?)_settings.EnglishEnabled;
             if (MaxSuggestionsBox is not null)
                 MaxSuggestionsBox.Value = Math.Clamp(_settings.MaxSuggestions, 1, 20);
+            if (MinWordLengthBox is not null)
+                MinWordLengthBox.Value = Math.Clamp(_settings.MinWordLength, 1, 10);
+
+            // Path hint: concrete settings.json location when AppData is available.
+            if (SettingsPathHint is not null)
+            {
+                try
+                {
+                    SettingsPathHint.Text = $"Saved to {AppPaths.SettingsPath}";
+                }
+                catch
+                {
+                    SettingsPathHint.Text = "Saved to %APPDATA%\\BiSpell\\settings.json";
+                }
+            }
         }
         finally
         {
@@ -155,6 +174,12 @@ public sealed partial class MainWindow : Window
             _settings.MaxSuggestions = double.IsNaN(MaxSuggestionsBox.Value)
                 ? 5
                 : (int)Math.Clamp(MaxSuggestionsBox.Value, 1, 20);
+        }
+        if (MinWordLengthBox is not null)
+        {
+            _settings.MinWordLength = double.IsNaN(MinWordLengthBox.Value)
+                ? 2
+                : (int)Math.Clamp(MinWordLengthBox.Value, 1, 10);
         }
 
         _settings.Normalize();
@@ -198,7 +223,7 @@ public sealed partial class MainWindow : Window
 
         string state = _settings.IsEnabled ? "enabled" : "disabled";
         SetStatus(
-            $"Settings saved ({state}; TR={_settings.TurkishEnabled}, EN={_settings.EnglishEnabled}, max={_settings.MaxSuggestions}). Press F7 to re-check.",
+            $"Settings saved ({state}; TR={_settings.TurkishEnabled}, EN={_settings.EnglishEnabled}, max={_settings.MaxSuggestions}, minLen={_settings.MinWordLength}). Press F7 to re-check.",
             CountFromList());
     }
 
@@ -221,6 +246,28 @@ public sealed partial class MainWindow : Window
         ApplySettingsToEngine();
         SetStatus(
             $"Max suggestions = {_settings.MaxSuggestions} (saved). Press F7 to re-check.",
+            CountFromList());
+    }
+
+    private void MinWordLengthBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_suppressSettingsEvents) return;
+        if (MinWordLengthBox is null) return;
+        if (double.IsNaN(args.NewValue)) return;
+
+        // Clamp to product rule 1–10 (matches AppUserSettings.Normalize / engine).
+        double clamped = Math.Clamp(args.NewValue, 1, 10);
+        if (!double.IsNaN(MinWordLengthBox.Value) && Math.Abs(MinWordLengthBox.Value - clamped) > 0.001)
+        {
+            _suppressSettingsEvents = true;
+            try { MinWordLengthBox.Value = clamped; }
+            finally { _suppressSettingsEvents = false; }
+        }
+
+        SaveSettingsFromUi();
+        ApplySettingsToEngine();
+        SetStatus(
+            $"Min word length = {_settings.MinWordLength} (saved). Short tokens skipped on check. Press F7 to re-check.",
             CountFromList());
     }
 
