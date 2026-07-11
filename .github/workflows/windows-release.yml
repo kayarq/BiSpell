@@ -1,7 +1,12 @@
 # Build unpackaged WinUI + native DLL on GitHub-hosted Windows runners.
 # Produces a zip release asset so contributors need NOT install VS/CMake on C:.
 #
-# Trigger: tag v* (e.g. v0.1.0-windows) or manual workflow_dispatch.
+# Pipeline (W3 Mandate B):
+#   build-windows-x64  → zip artifact
+#   smoke-windows-x64  → needs build; extract zip, launch smoke
+#   release-windows-x64 → needs smoke green; attach zip to GitHub Release
+#
+# Trigger: tag v* (e.g. v0.1.4-windows) or manual workflow_dispatch.
 name: windows-release
 
 on:
@@ -12,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version label (e.g. 0.1.0)"
+        description: "Release version label (e.g. 0.1.4)"
         required: true
-        default: "0.1.3"
+        default: "0.1.4"
       create_release:
         description: "Create/update GitHub Release and attach zip"
         type: boolean
@@ -28,6 +33,11 @@ jobs:
   build-windows-x64:
     name: WinUI x64 package
     runs-on: windows-latest
+    outputs:
+      package_name: ${{ steps.zip.outputs.package_name }}
+      package_version: ${{ steps.zip.outputs.package_version }}
+      release_tag: ${{ steps.rel.outputs.tag }}
+      release_title: ${{ steps.rel.outputs.title }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,18 +87,6 @@ jobs:
           Push-Location windows/app
           try {
             $proj = "BiSpell.App/BiSpell.App.csproj"
-            $commonProps = @(
-              "-p:Configuration=Release",
-              "-p:Platform=x64",
-              "-p:RuntimeIdentifier=win-x64",
-              "-p:WindowsPackageType=None",
-              "-p:WindowsAppSDKSelfContained=true",
-              "-p:WindowsAppSdkBootstrapInitialize=false",
-              "-p:WindowsAppSdkUndockedRegFreeWinRTInitialize=true",
-              "-p:SelfContained=true",
-              "-p:PublishReadyToRun=false",
-              "-p:PublishDir=$pub\"
-            )
             Write-Host "dotnet publish -> $pub"
             & dotnet publish $proj -c Release -r win-x64 --self-contained true `
               -p:Platform=x64 `
@@ -164,6 +162,7 @@ jobs:
           "@ | Set-Content -Encoding UTF8 (Join-Path $out "README-WINDOWS.txt")
 
       - name: Zip package
+        id: zip
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -177,20 +176,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           if (Test-Path "dist/$name.zip") { Remove-Item "dist/$name.zip" -Force }
           Compress-Archive -Path "dist/BiSpell-win-x64/*" -DestinationPath "dist/$name.zip" -Force
-          # Also keep a stable name for artifact download
+          # Also keep a stable name for artifact download / smoke
           Copy-Item -Force "dist/$name.zip" "dist/BiSpell-win-x64.zip"
-          "PACKAGE_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PACKAGE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "package_name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "package_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Get-Item "dist/$name.zip" | Format-List Name, Length, FullName
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: BiSpell-win-x64
-          path: |
-            dist/BiSpell-win-x64.zip
-            dist/${{ env.PACKAGE_NAME }}.zip
-          if-no-files-found: error
 
       - name: Resolve release tag
         id: rel
@@ -207,12 +197,128 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "title=$title" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Upload build artifact (zip only — same bytes users download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiSpell-win-x64
+          path: |
+            dist/BiSpell-win-x64.zip
+            dist/${{ steps.zip.outputs.package_name }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Smoke: exercise the packaged zip on a clean windows-latest agent.
+  # Gates release — bad builds never attach as "working".
+  # ---------------------------------------------------------------------------
+  smoke-windows-x64:
+    name: Launch smoke (zip)
+    runs-on: windows-latest
+    needs: [build-windows-x64]
+    steps:
+      - name: Checkout (smoke script)
+        uses: actions/checkout@v4
+
+      - name: Download package zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BiSpell-win-x64
+          path: dist
+
+      - name: Inventory artifact
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse dist | Format-Table Name, Length, FullName -AutoSize
+          if (-not (Test-Path "dist/BiSpell-win-x64.zip")) {
+            throw "dist/BiSpell-win-x64.zip missing after artifact download"
+          }
+
+      - name: Launch smoke (extract zip, run exe, assert log)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $extract = Join-Path $env:RUNNER_TEMP "bispell-smoke"
+          $transcript = Join-Path $env:RUNNER_TEMP "bispell-smoke-transcript.txt"
+          & ./windows/app/scripts/smoke-launch.ps1 `
+            -ZipPath "dist/BiSpell-win-x64.zip" `
+            -ExtractDir $extract `
+            -TimeoutSeconds 20 `
+            -TranscriptPath $transcript
+          if ($LASTEXITCODE -ne 0) { throw "smoke-launch.ps1 failed with exit $LASTEXITCODE" }
+
+      - name: Collect smoke logs
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "smoke-logs"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $pairs = @(
+            @{ Src = (Join-Path $env:TEMP "BiSpell-startup.log"); Dst = "BiSpell-startup.log" },
+            @{ Src = (Join-Path $env:TEMP "BiSpell-startup.status"); Dst = "BiSpell-startup.status" },
+            @{ Src = (Join-Path $env:RUNNER_TEMP "bispell-smoke-transcript.txt"); Dst = "bispell-smoke-transcript.txt" }
+          )
+          foreach ($p in $pairs) {
+            if (Test-Path -LiteralPath $p.Src) {
+              Copy-Item -Force -LiteralPath $p.Src (Join-Path $out $p.Dst)
+              Write-Host "collected $($p.Dst)"
+            } else {
+              Write-Host "missing $($p.Src)"
+            }
+          }
+          Get-ChildItem $out -ErrorAction SilentlyContinue | Format-Table Name, Length
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiSpell-smoke-logs
+          path: ${{ runner.temp }}/smoke-logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup BiSpell processes
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name "BiSpell.App" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Write-Host "Killing leftover pid=$($_.Id)"
+              Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+
+  # ---------------------------------------------------------------------------
+  # Release: only after smoke green. Publishes the same zip artifact.
+  # ---------------------------------------------------------------------------
+  release-windows-x64:
+    name: GitHub Release
+    runs-on: windows-latest
+    needs: [build-windows-x64, smoke-windows-x64]
+    if: |
+      always() &&
+      needs.build-windows-x64.result == 'success' &&
+      needs.smoke-windows-x64.result == 'success' &&
+      (github.event_name == 'push' || inputs.create_release == true)
+    steps:
+      - name: Download package zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BiSpell-win-x64
+          path: dist
+
+      - name: Verify release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $name = "${{ needs.build-windows-x64.outputs.package_name }}"
+          if (-not (Test-Path "dist/BiSpell-win-x64.zip")) { throw "stable zip missing" }
+          if (-not (Test-Path "dist/$name.zip")) { throw "versioned zip missing: dist/$name.zip" }
+          Get-ChildItem dist/*.zip | Format-Table Name, Length -AutoSize
+
       - name: Create GitHub Release
-        if: github.event_name == 'push' || inputs.create_release == true
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.rel.outputs.tag }}
-          name: ${{ steps.rel.outputs.title }}
+          tag_name: ${{ needs.build-windows-x64.outputs.release_tag }}
+          name: ${{ needs.build-windows-x64.outputs.release_title }}
           draft: false
           prerelease: true
           generate_release_notes: true
@@ -226,6 +332,7 @@ jobs:
             | Arch | **x64** |
             | Package | Unpackaged WinUI 3 + `bispell_core.dll` + TR/EN dictionaries |
             | Data | `%APPDATA%\BiSpell\` |
+            | CI | Build zip → launch smoke (BISPELL_SMOKE=1) → release only if smoke green |
 
             ### Smoke test
             1. Run `BiSpell.App.exe`
@@ -235,6 +342,6 @@ jobs:
             **Not included:** macOS Notes UI, system-wide Accessibility/UIA, templates.
           files: |
             dist/BiSpell-win-x64.zip
-            dist/${{ env.PACKAGE_NAME }}.zip
+            dist/${{ needs.build-windows-x64.outputs.package_name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
