@@ -177,7 +177,7 @@ Linux CI / orchestrator does **not** build WinUI.
 
 1. Launch BiSpell.
 2. Confirm status line shows engine ready (or a clear error if DLL/dicts missing).
-3. A sample note opens in the editor (or create **New**). Paste/type: `I recieve mail. merhabaa dünya`
+3. Create **New** if the notes list is empty, then paste/type: `I recieve mail. merhabaa dünya`
 4. Press **F7** or **Check** → expect `recieve`, `merhabaa` in the misspellings list; status badge shows count.
 5. Select `recieve` → suggestions (ideally include `receive`).
 6. **Enter** or **double-click** a suggestion → text updated at the **UTF-16** range; auto re-check.

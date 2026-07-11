@@ -232,7 +232,7 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 | Save | **Ctrl+S** / **Save** button; auto-save when switching notes or hide/quit |
 | Spell | Same engine + F7 + as-you-type on the active note body |
 
-Empty notes folder seeds a sample welcome note on first launch.
+Empty notes folder stays empty (click **New** to create a note). The product name **BiSpell** is auto-added to the personal dictionary so it is not flagged as a misspelling.
 
 ### As-you-type (Phase 4 polish — note editor only)
 
