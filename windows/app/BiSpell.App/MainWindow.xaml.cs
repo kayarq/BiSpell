@@ -150,6 +150,7 @@ public sealed partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
+            // Full teardown on any close path (App.Quit → Close, or Closing hook missed).
             try { SaveSettingsFromUi(); } catch { /* ignore */ }
             try { PersistActiveNote(); } catch { /* ignore */ }
 
@@ -183,17 +184,34 @@ public sealed partial class MainWindow : Window
             }
             catch { /* ignore */ }
 
-            _engine?.Dispose();
-            _engine = null;
+            try
+            {
+                _engine?.Dispose();
+                _engine = null;
+            }
+            catch { /* ignore */ }
+
+            // Guarantee process exit: WinUI can keep the process alive after last window.
+            // App.Quit is re-entrancy-safe (_isQuitting); if already quitting, Exit still runs
+            // from the outer Quit after Close returns. If Closing never routed to Quit, do it now.
+            try
+            {
+                if (!App.Current.IsQuitting)
+                    App.Current.Quit();
+            }
+            catch
+            {
+                try { Environment.Exit(CrashLog.ExitOk); } catch { /* ignore */ }
+            }
         };
 
         CrashLog.Write("MainWindow ctor: complete");
     }
 
-    /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
+    /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on quit / switch).</summary>
     public void PersistSettings() => SaveSettingsFromUi();
 
-    /// <summary>Save the active note body if dirty (called on hide/quit/switch).</summary>
+    /// <summary>Save the active note body if dirty (called on quit / switch).</summary>
     public void PersistActiveNote()
     {
         try
@@ -278,19 +296,7 @@ public sealed partial class MainWindow : Window
             if (AsYouTypeCheck is not null)
                 AsYouTypeCheck.IsChecked = (bool?)_settings.AsYouTypeEnabled;
 
-            if (SettingsPathHint is not null)
-            {
-                try
-                {
-                    SettingsPathHint.Text =
-                        $"Saved to {AppPaths.SettingsPath} · notes: {AppPaths.NotesDirectory}";
-                }
-                catch
-                {
-                    SettingsPathHint.Text =
-                        "Saved to %APPDATA%\\BiSpell\\settings.json · notes under Notes\\";
-                }
-            }
+            // Settings path hint removed from chrome (P021-UI); paths remain in status/docs.
         }
         finally
         {

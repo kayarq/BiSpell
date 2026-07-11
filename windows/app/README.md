@@ -24,14 +24,13 @@ BiSpell.App/
     SettingsStore.cs            ← settings.json load/save
     NotesStore.cs               ← plain-text notes under Notes\
     EditorSpellDebouncer.cs     ← as-you-type debounce (DispatcherQueueTimer)
-    TrayIconService.cs          ← Win32 Shell_NotifyIcon (show / quit)
   UI/
     SuggestionPopupController.cs← as-you-type suggestion Popup (Enter/1–5/Esc)
   Utilities/
     ClipboardSpellFix.cs        ← pure batch top-suggestion apply (no clipboard IO)
   Models/MisspellingItem.cs
   MainWindow.xaml(.cs)   ← notes sidebar + editor check / list / suggest / apply / settings
-  App.xaml(.cs)          ← tray lifecycle (no global hotkey)
+  App.xaml(.cs)          ← close = full Quit (no tray; no hide-to-tray)
 native/                  ← staged bispell_core.dll
 scripts/                 ← build-native, stage-dictionaries
 ```
@@ -41,9 +40,9 @@ scripts/                 ← build-native, stage-dictionaries
 - Notes sidebar: New / Delete / select; title = first non-empty line
 - Note editor with **F7** check, misspellings list, suggestions, apply
 - **As-you-type** (default on): length-aware debounce — delete settles quietly; popup on word boundary
-- Settings: enable, TR/EN, max suggestions, min word length, debounce, as-you-type → `%APPDATA%\BiSpell\settings.json`
-- Notes files: `%APPDATA%\BiSpell\Notes\*.txt` (Ctrl+S save; auto-save on switch)
-- Tray: Show BiSpell / Quit; close window hides to tray
+- Settings: enable, TR/EN, as-you-type on main surface; max / min word / debounce under **Advanced** → `%APPDATA%\BiSpell\settings.json`
+- Notes files: `%APPDATA%\BiSpell\Notes\*.txt` (Ctrl+S save; auto-save on switch / quit)
+- Close (**X**): full process exit (persist + dispose); no tray
 
 ## Diagnostic: v0.1.3 `ToggleButton.IsChecked` crash (W1 fix)
 

@@ -15,7 +15,7 @@ This tree hosts a portable C++ spell core (algorithm parity with Swift `BiSpellC
 | UI shell | **C# WinUI 3** (Windows App SDK) | **Product path** — unpackaged F5; XAML ergonomics |
 | Dictionaries | Same `.dic` / `.aff` as macOS | **SoT:** `Sources/BiSpellCore/Resources/Dictionaries/` |
 | User data | `%APPDATA%\BiSpell\` | `settings.json`, `user-lexicon.json`, `Notes\*.txt` |
-| Tray | Win32 `Shell_NotifyIcon` | Show window / Quit (unpackaged) |
+| Lifecycle | Close = full quit | No tray / hide-to-tray (v0.2.1+); quieter unsigned Defender story |
 | Notes MVP | Plain-text files under `Notes\` | Sidebar list + editor; title = first line |
 | As-you-type | In-note debounce + popup | Length-aware: quiet on delete / mid-word; popup on word boundary |
 
@@ -43,7 +43,7 @@ windows/
     src/
   app/                      ← C# WinUI 3 shell (Windows host only)
     BiSpell.sln
-    BiSpell.App/            ← WinUI project + Interop/ + Services/ (settings, tray)
+    BiSpell.App/            ← WinUI project + Interop/ + Services/ (settings, notes)
     native/                 ← staged bispell_core.dll (build output; gitignored)
     scripts/                ← build-native.ps1, stage-dictionaries.ps1
   assets/Dictionaries/      ← optional CMake/manual mirror of SoT
@@ -182,9 +182,9 @@ Linux CI / orchestrator does **not** build WinUI.
 5. Select `recieve` → suggestions (ideally include `receive`).
 6. **Enter** or **double-click** a suggestion → text updated at the **UTF-16** range; auto re-check.
 7. **Add to dictionary** / **Ignore** on a nonsense token → re-check no longer flags it; word appears in the lexicon panel (below).
-8. Toggle **Spell-check enabled** / TR/EN / **Max suggestions** / **Min word length**; re-check. Quit and relaunch → settings still applied.
+8. Toggle **Spell-check enabled** / TR/EN / **As-you-type**; open **Advanced** for **Max suggestions** / **Min word length** / **Debounce**; re-check. Close window (**X**) and relaunch → settings still applied.
 9. **Save (Ctrl+S)** or switch notes → note files under `%APPDATA%\BiSpell\Notes\`.
-10. Tray icon: right-click → **Show BiSpell** / **Quit**. Closing the window hides to tray (not exit).
+10. Closing the window (**X** / Alt+F4) **fully quits** the process (no tray icon; no hide-to-tray).
 
 ### Settings
 
@@ -194,10 +194,10 @@ Settings card on the main window (persisted to AppData):
 |---------|--------|
 | **Spell-check enabled** | Master gate for check |
 | **Turkish** / **English** | Language dictionaries |
-| **Max suggestions** | Caps suggestion list (1–20) |
-| **Min word length** | Tokens shorter than this are **skipped** on check (1–10, default 2) |
 | **As-you-type check** | Debounced live check in the **active note editor** only. Off → F7 still works. JSON: `asYouTypeEnabled` |
-| **Debounce (ms)** | Applies after **typing pause** and after **delete settle** (0–5000, default **250**). JSON: `debounceMilliseconds` |
+| **Advanced → Max suggestions** | Caps suggestion list (1–20) |
+| **Advanced → Min word length** | Tokens shorter than this are **skipped** on check (1–10, default 2) |
+| **Advanced → Debounce (ms)** | Applies after **typing pause** and after **delete settle** (0–5000, default **250**). JSON: `debounceMilliseconds` |
 
 There is **no** global hotkey, clipboard-replace utility, or UIA assist in the product UI. Older `settings.json` keys (`globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled`) are ignored if present.
 
@@ -208,7 +208,7 @@ There is **no** global hotkey, clipboard-replace utility, or UIA assist in the p
 | Sidebar | List of notes (title = first non-empty line, truncated, or **Untitled**); **New** / **Delete** / select |
 | Editor | Active note body; same as-you-type + misspellings + suggestions as the spell loop |
 | Storage | `%APPDATA%\BiSpell\Notes\*.txt` (UTF-8) |
-| Save | **Ctrl+S** / **Save** button; **auto-save** when switching notes or hiding/quitting |
+| Save | **Ctrl+S** / **Save** button; **auto-save** when switching notes or quitting |
 | Scope | No templates, locks, taxonomy, or markdown preview |
 
 ### As-you-type (editor / note only)
@@ -228,7 +228,7 @@ Length-aware scheduling so holding backspace does not thrash the popup:
 
 ### Lexicon manage UI
 
-Collapsible expander **Personal dictionary & ignored words** (collapsed by default).
+Collapsible expander **Personal dictionary** (collapsed by default).
 
 | List | How words get there | Manage action |
 |------|---------------------|---------------|
@@ -243,11 +243,11 @@ Collapsible expander **Personal dictionary & ignored words** (collapsed by defau
 | `%APPDATA%\BiSpell\user-lexicon.json` | Personal dictionary + ignore list |
 | `%APPDATA%\BiSpell\Notes\*.txt` | Note bodies (title derived from first non-empty line) |
 
-### Tray
+### Process lifecycle (v0.2.1+)
 
-- Notification-area icon via Win32 `Shell_NotifyIcon` (no system-wide injection).
-- **Show BiSpell** / double-click: bring main window forward.
-- **Quit**: dispose tray and exit process.
+- **X** / Alt+F4 → full quit: persist settings + dirty note → dispose runtime resources → `Environment.Exit(0)`.
+- **No system tray** and **no hide-to-tray** — process does not stay resident after close.
+- Unsigned release zips may still show SmartScreen / Defender prompts; downloading from the fork **Releases** page is recommended.
 
 ### Keyboard
 
@@ -288,11 +288,12 @@ Environment override for dictionaries: `BISPELL_DICT_DIR`.
 |------|---------|
 | U2–U3 | C++ core, C ABI, `ctest` on Linux |
 | U4 | C# WinUI 3 + P/Invoke, dictionary packaging, unpackaged F5 |
-| U5 | Settings persistence, tray show/quit, AppData paths |
+| U5 | Settings persistence, AppData paths (tray later dropped) |
 | Phase 1 | Min word length + lexicon manage UI |
 | Phase 4 | As-you-type (length-aware quiet/full) + suggestion popup |
 | Phase 5 | Notes MVP (sidebar + `%APPDATA%\\BiSpell\\Notes\\`) |
-| Removed | Global hotkey, clipboard replace utility, UIA assist, probe button |
+| v0.2.1 | Close = full quit; no tray; UI denser + Advanced expander |
+| Removed | Global hotkey, clipboard replace utility, UIA assist, tray |
 
 Encoding contract: internal strings are **UTF-8**; token/misspelling ranges are **UTF-16 code units**.
 

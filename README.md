@@ -55,7 +55,7 @@ Personal use. Dictionaries from [wooorm/dictionaries](https://github.com/wooorm/
 
 ## Windows (parallel path)
 
-**macOS remains the primary platform** and is **unchanged** (`Package.swift`, `Sources/`, SwiftPM). A fork-friendly Windows path lives under [`windows/`](windows/): portable C++17 spell core (algorithm parity with Swift `BiSpellCore`) + **C# WinUI 3** shell for **in-app Notes**, check / suggest / apply, settings, and tray. It is **editor-only** (no system-wide hotkey/UIA) and **not** a port of the full macOS Notes/templates product.
+**macOS remains the primary platform** and is **unchanged** (`Package.swift`, `Sources/`, SwiftPM). A fork-friendly Windows path lives under [`windows/`](windows/): portable C++17 spell core (algorithm parity with Swift `BiSpellCore`) + **C# WinUI 3** shell for **in-app Notes**, check / suggest / apply, and settings. It is **editor-only** (no system-wide hotkey/UIA, **no tray** — closing the window fully quits) and **not** a port of the full macOS Notes/templates product.
 
 | Doc | Contents |
 |-----|----------|

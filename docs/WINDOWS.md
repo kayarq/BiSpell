@@ -20,8 +20,8 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │  tests/ ctest on Linux + Windows                            │
 │  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
 │         Notes sidebar │ Editor Check/Suggest/Apply          │
-│         Settings │ Tray │ As-you-type (debounced) + popup   │
-│         Editor-only (no global hotkey / UIA utility)        │
+│         Settings │ As-you-type (debounced) + popup          │
+│         Close = full quit (no tray); editor-only            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,13 +53,14 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - UserLexicon + file store under `%APPDATA%\BiSpell\`
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
-3. WinUI 3 shell: **Notes sidebar** + note editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage**, **persistent settings**, **system tray** (show / quit).
+3. WinUI 3 shell: **Notes sidebar** + note editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage**, **persistent settings**. Closing the window **fully quits** the process (no hide-to-tray).
 4. **As-you-type (in-note only):** length-aware debounce — quiet list recheck on delete / mid-word; full list + popup on word boundary / replace. Settings: `asYouTypeEnabled`, `debounceMilliseconds`. **Not** system-wide.
 5. **Notes MVP:** list / new / delete / select; plain `.txt` under `%APPDATA%\BiSpell\Notes\`; title from first non-empty line; Ctrl+S + auto-save on switch. No templates/locks/taxonomy/markdown preview.
 6. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
 
+- System tray / notification-area icon / hide-to-tray (removed in v0.2.1 — quieter unsigned-app Defender / SmartScreen story).
 - Global hotkey, out-of-app clipboard replace utility, UIA assist / probe (removed from product surface).
 - Continuous system-wide Accessibility / UI Automation monitoring or overlay underlines in other apps.
 - macOS-parity templates, locks, taxonomy, markdown library, terminal themes.
@@ -198,9 +199,9 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 
 **Settings across relaunch**
 
-1. Launch BiSpell, note status line shows paths under `%APPDATA%\BiSpell\`.
-2. Uncheck **Turkish** (leave English on), set **Max suggestions** to `3`, set **Min word length** to e.g. `4`, optionally uncheck **Spell-check enabled**.
-3. Quit via tray **Quit** (or close then Quit).
+1. Launch BiSpell, note status line shows engine ready (or a clear error).
+2. Uncheck **Turkish** (leave English on), set **Max suggestions** to `3`, set **Min word length** to e.g. `4` (under **Advanced**), optionally uncheck **Spell-check enabled**.
+3. Close the window (**X** / Alt+F4) — process exits fully (no tray icon remains).
 4. Confirm `%APPDATA%\BiSpell\settings.json` contains the chosen values (including `minWordLength`).
 5. Relaunch → UI toggles match; Check with `isEnabled=false` returns no misspellings; with languages restored, max suggestions caps the list; short tokens below min length are skipped.
 
@@ -213,13 +214,11 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 5. Confirm `%APPDATA%\BiSpell\user-lexicon.json` lists the word under `addedWords` (or equivalent).
 6. **Remove selected** → re-check → word flagged again; **Ignore** then **Unignore selected** similarly.
 
-### Tray (notification area)
+### Process lifecycle (v0.2.1+)
 
-- Notification-area icon via Win32 `Shell_NotifyIcon` (no WinForms dependency).
-- Menu: **Show BiSpell** (activate main window), **Quit** (dispose tray + exit).
-- Double-click tray icon = show window.
-- Closing the main window **hides to tray** (does not quit); use **Quit** to exit cleanly.
-- No utility balloons for out-of-app hotkey (that surface was removed).
+- Closing the main window (**X** / Alt+F4) always **fully quits**: persist settings + dirty note → dispose debouncer / popup / engine → `Environment.Exit(0)`.
+- **No system tray** / notification-area icon and **no hide-to-tray** — no orphan process after close.
+- Unsigned unpackaged zip may still prompt SmartScreen / Defender; dropping tray reduces ambient shell hooks that can raise noise. Prefer downloading from the fork **Releases** page.
 
 ### Notes MVP (Phase 5)
 
@@ -229,7 +228,7 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 | Title | First non-empty line of body (truncated), or **Untitled** |
 | Files | `%APPDATA%\BiSpell\Notes\*.txt` (UTF-8) |
 | New / Delete | Sidebar buttons; delete removes the file |
-| Save | **Ctrl+S** / **Save** button; auto-save when switching notes or hide/quit |
+| Save | **Ctrl+S** / **Save** button; auto-save when switching notes or quitting |
 | Spell | Same engine + F7 + as-you-type on the active note body |
 
 Empty notes folder stays empty (click **New** to create a note). The product name **BiSpell** is auto-added to the personal dictionary so it is not flagged as a misspelling.
@@ -239,7 +238,7 @@ Empty notes folder stays empty (click **New** to create a note). The product nam
 | Piece | Behavior |
 |-------|----------|
 | **As-you-type check** | Shell-only `asYouTypeEnabled` (default **true**). Off → no TextChanged scheduling; F7 unchanged. |
-| **Debounce (ms)** | `debounceMilliseconds` (default **250**, clamp 0–5000). Caption: applies after typing pause / after delete settle. |
+| **Debounce (ms)** | `debounceMilliseconds` (default **250**, clamp 0–5000). Under **Advanced**; applies after typing pause / after delete settle. |
 | **Delete (length ↓)** | Hide popup immediately; cancel pending short timer; **QuietRecheck** after `max(debounce, 450)` ms — **list only**, no popup. |
 | **Insert letter/digit** | QuietRecheck after normal debounce (list only). |
 | **Insert whitespace/punct** or same-length replace | **FullAsYouType** after normal debounce (list + nearest + popup). |
@@ -248,7 +247,7 @@ Empty notes folder stays empty (click **New** to create a note). The product nam
 | Programmatic text | Note load / apply use `_suppressAsYouType`. |
 | Smoke | `BISPELL_SMOKE=1` → no schedule / no timer arm. |
 
-**Removed from product:** global hotkey (`RegisterHotKey`), clipboard utility path, UIA assist / probe button, tray balloons for utility results.
+**Removed from product:** global hotkey (`RegisterHotKey`), clipboard utility path, UIA assist / probe button, system tray / hide-to-tray.
 
 ## Status
 
@@ -259,14 +258,15 @@ Empty notes folder stays empty (click **New** to create a note). The product nam
 |-------|--------|
 | C++ core + `ctest` + C ABI | ✅ Linux-verified (`bispell_core_tests`) |
 | C# WinUI 3 shell (Notes + check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
-| Settings + tray + AppData | ✅ U5 |
+| Settings + AppData | ✅ U5 (tray dropped in v0.2.1) |
 | Phase 1: min word length + lexicon manage | ✅ |
 | Phase 4: length-aware as-you-type + popup | ✅ (`BISPELL_SMOKE` no-ops timers) |
 | Phase 5: Notes MVP (`Notes\*.txt`) | ✅ |
+| Close = full process quit (no tray) | ✅ v0.2.1 |
 | Out-of-app hotkey / UIA / clipboard utility | ❌ **Removed** (editor-only product) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
-| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.9) |
+| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.2.1) |
 | macOS Swift product | ✅ Unchanged |
 
 **Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK.

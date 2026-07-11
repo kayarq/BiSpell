@@ -8,7 +8,10 @@
     xmlns:services="using:BiSpell.Services"
     Title="BiSpell — Notes">
 
-    <Grid x:Name="RootGrid" Padding="12" RowSpacing="10" ColumnSpacing="10"
+    <!-- P021-UI Mandate B: compact chrome + stronger surfaces.
+         Daily toggles stay visible; rare knobs (max/min/debounce) under Advanced.
+         Marketing captions + path hint removed. Window Title supplies product name. -->
+    <Grid x:Name="RootGrid" Padding="10" RowSpacing="8" ColumnSpacing="8"
           Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
           KeyDown="RootGrid_KeyDown">
         <Grid.RowDefinitions>
@@ -25,11 +28,8 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Header + toolbar + settings (span all columns) -->
-        <StackPanel Grid.Row="0" Grid.ColumnSpan="4" Spacing="8">
-            <TextBlock Text="BiSpell" Style="{StaticResource TitleTextBlockStyle}"/>
-            <TextBlock Text="Notes + TR/EN spelling (in-app only). No system-wide hotkey or UIA injection."
-                       Opacity="0.7" TextWrapping="Wrap"/>
+        <!-- Toolbar + compact settings (span all columns) -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="4" Spacing="6">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button x:Name="CheckButton" Content="Check (F7)" Click="CheckButton_Click"
                         Style="{StaticResource AccentButtonStyle}" MinWidth="120"/>
@@ -47,20 +47,16 @@
                  Structure only: no IsChecked / Checked / Unchecked / Value / ValueChanged here.
                  State + handlers are applied in MainWindow code-behind after InitializeComponent
                  + LoadSettingsIntoUi (W1 — avoids ToggleButton.IsChecked assign crash). -->
-            <Border Padding="12,10"
+            <Border Padding="10,8"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     CornerRadius="6"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1">
-                <StackPanel Spacing="8">
+                <StackPanel Spacing="6">
                     <TextBlock Text="Spell settings"
                                Style="{StaticResource BodyStrongTextBlockStyle}"/>
-                    <TextBlock x:Name="SettingsPathHint"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Opacity="0.65"
-                               TextWrapping="Wrap"
-                               Text="Saved to %APPDATA%\BiSpell\settings.json"/>
 
+                    <!-- Daily toggles stay on the main surface -->
                     <StackPanel Orientation="Horizontal" Spacing="16">
                         <CheckBox x:Name="EnabledCheck" Content="Spell-check enabled"/>
                         <CheckBox x:Name="TurkishCheck" Content="Turkish"/>
@@ -68,19 +64,24 @@
                         <CheckBox x:Name="AsYouTypeCheck" Content="As-you-type check"/>
                     </StackPanel>
 
-                    <StackPanel Orientation="Horizontal" Spacing="20">
-                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock Text="Max suggestions" VerticalAlignment="Center"/>
-                            <NumberBox x:Name="MaxSuggestionsBox"
-                                       Minimum="1"
-                                       Maximum="20"
-                                       SpinButtonPlacementMode="Inline"
-                                       SmallChange="1"
-                                       LargeChange="5"
-                                       Width="120"/>
-                        </StackPanel>
-                        <StackPanel Spacing="2" VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                    <!-- Rare knobs: max suggestions / min word length / debounce -->
+                    <Expander x:Name="AdvancedSettingsExpander"
+                              Header="Advanced"
+                              IsExpanded="False"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal" Spacing="20" Margin="0,6,0,0">
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="Max suggestions" VerticalAlignment="Center"/>
+                                <NumberBox x:Name="MaxSuggestionsBox"
+                                           Minimum="1"
+                                           Maximum="20"
+                                           SpinButtonPlacementMode="Inline"
+                                           SmallChange="1"
+                                           LargeChange="5"
+                                           Width="120"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Text="Min word length" VerticalAlignment="Center"/>
                                 <NumberBox x:Name="MinWordLengthBox"
                                            Minimum="1"
@@ -90,13 +91,7 @@
                                            LargeChange="1"
                                            Width="100"/>
                             </StackPanel>
-                            <TextBlock Text="Tokens shorter than this are skipped when checking."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Opacity="0.65"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
-                        <StackPanel Spacing="2" VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Text="Debounce (ms)" VerticalAlignment="Center"/>
                                 <NumberBox x:Name="DebounceBox"
                                            Minimum="0"
@@ -106,12 +101,8 @@
                                            LargeChange="250"
                                            Width="120"/>
                             </StackPanel>
-                            <TextBlock Text="Applies after typing pause / after delete settle."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Opacity="0.65"
-                                       TextWrapping="Wrap"/>
                         </StackPanel>
-                    </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Border>
         </StackPanel>
@@ -130,22 +121,27 @@
                 <Button x:Name="DeleteNoteButton" Content="Delete" Click="DeleteNoteButton_Click"
                         MinWidth="72" IsEnabled="False"/>
             </StackPanel>
-            <ListView x:Name="NotesList"
-                      Grid.Row="2"
-                      SelectionMode="Single"
-                      SelectionChanged="NotesList_SelectionChanged">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="services:NoteItem">
-                        <StackPanel Padding="4,6" Spacing="2">
-                            <TextBlock Text="{x:Bind Title}" TextWrapping="NoWrap"
-                                       TextTrimming="CharacterEllipsis"
-                                       FontWeight="SemiBold"/>
-                            <TextBlock Text="{x:Bind FileName}" Opacity="0.55" FontSize="11"
-                                       TextTrimming="CharacterEllipsis"/>
-                        </StackPanel>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
+            <Border Grid.Row="2"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <ListView x:Name="NotesList"
+                          SelectionMode="Single"
+                          SelectionChanged="NotesList_SelectionChanged">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="services:NoteItem">
+                            <StackPanel Padding="4,6" Spacing="2">
+                                <TextBlock Text="{x:Bind Title}" TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
+                                           FontWeight="SemiBold"/>
+                                <TextBlock Text="{x:Bind FileName}" Opacity="0.55" FontSize="11"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
         </Grid>
 
         <!-- Note editor -->
@@ -157,14 +153,21 @@
             <TextBlock x:Name="EditorHeader"
                        Text="Note"
                        Style="{StaticResource SubtitleTextBlockStyle}"/>
-            <TextBox x:Name="EditorBox"
-                     Grid.Row="1"
-                     AcceptsReturn="True"
-                     TextWrapping="Wrap"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                     PlaceholderText="Write a note… first line becomes the title"
-                     FontFamily="Segoe UI"
-                     FontSize="15"/>
+            <Border Grid.Row="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <TextBox x:Name="EditorBox"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         PlaceholderText="Write a note… first line becomes the title"
+                         FontFamily="Segoe UI"
+                         FontSize="15"
+                         BorderThickness="0"
+                         Background="Transparent"/>
+            </Border>
         </Grid>
 
         <!-- Misspellings -->
@@ -174,20 +177,25 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
             <TextBlock Text="Misspellings" Style="{StaticResource SubtitleTextBlockStyle}"/>
-            <ListView x:Name="MisspellingsList"
-                      Grid.Row="1"
-                      SelectionChanged="MisspellingsList_SelectionChanged"
-                      DoubleTapped="MisspellingsList_DoubleTapped">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="models:MisspellingItem">
-                        <StackPanel Padding="4,6" Spacing="2">
-                            <TextBlock Text="{x:Bind Display}" TextWrapping="Wrap"
-                                       FontWeight="SemiBold"/>
-                            <TextBlock Text="{x:Bind RangeLabel}" Opacity="0.6" FontSize="12"/>
-                        </StackPanel>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
+            <Border Grid.Row="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <ListView x:Name="MisspellingsList"
+                          SelectionChanged="MisspellingsList_SelectionChanged"
+                          DoubleTapped="MisspellingsList_DoubleTapped">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:MisspellingItem">
+                            <StackPanel Padding="4,6" Spacing="2">
+                                <TextBlock Text="{x:Bind Display}" TextWrapping="Wrap"
+                                           FontWeight="SemiBold"/>
+                                <TextBlock Text="{x:Bind RangeLabel}" Opacity="0.6" FontSize="12"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
         </Grid>
 
         <!-- Suggestions -->
@@ -196,20 +204,24 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Text="Suggestions (Enter / double-click apply)"
-                       Style="{StaticResource SubtitleTextBlockStyle}"
-                       TextWrapping="Wrap"/>
-            <ListView x:Name="SuggestionsList"
-                      Grid.Row="1"
-                      SelectionChanged="SuggestionsList_SelectionChanged"
-                      DoubleTapped="SuggestionsList_DoubleTapped"
-                      KeyDown="SuggestionsList_KeyDown"/>
+            <TextBlock Text="Suggestions"
+                       Style="{StaticResource SubtitleTextBlockStyle}"/>
+            <Border Grid.Row="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <ListView x:Name="SuggestionsList"
+                          SelectionChanged="SuggestionsList_SelectionChanged"
+                          DoubleTapped="SuggestionsList_DoubleTapped"
+                          KeyDown="SuggestionsList_KeyDown"/>
+            </Border>
         </Grid>
 
-        <!-- Lexicon management: collapsible -->
+        <!-- Lexicon management: collapsible (rare; stays collapsed by default) -->
         <Expander x:Name="LexiconExpander"
                   Grid.Row="2" Grid.ColumnSpan="4"
-                  Header="Personal dictionary &amp; ignored words"
+                  Header="Personal dictionary"
                   IsExpanded="False"
                   HorizontalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch"
@@ -229,10 +241,15 @@
                     <TextBlock x:Name="AddedWordsHeader"
                                Text="Dictionary"
                                Style="{StaticResource BodyStrongTextBlockStyle}"/>
-                    <ListView x:Name="AddedWordsList"
-                              Grid.Row="1"
-                              SelectionMode="Single"
-                              SelectionChanged="AddedWordsList_SelectionChanged"/>
+                    <Border Grid.Row="1"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <ListView x:Name="AddedWordsList"
+                                  SelectionMode="Single"
+                                  SelectionChanged="AddedWordsList_SelectionChanged"/>
+                    </Border>
                     <Button x:Name="RemoveWordButton"
                             Grid.Row="2"
                             Content="Remove selected"
@@ -251,10 +268,15 @@
                     <TextBlock x:Name="IgnoredWordsHeader"
                                Text="Ignored"
                                Style="{StaticResource BodyStrongTextBlockStyle}"/>
-                    <ListView x:Name="IgnoredWordsList"
-                              Grid.Row="1"
-                              SelectionMode="Single"
-                              SelectionChanged="IgnoredWordsList_SelectionChanged"/>
+                    <Border Grid.Row="1"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <ListView x:Name="IgnoredWordsList"
+                                  SelectionMode="Single"
+                                  SelectionChanged="IgnoredWordsList_SelectionChanged"/>
+                    </Border>
                     <Button x:Name="UnignoreWordButton"
                             Grid.Row="2"
                             Content="Unignore selected"
@@ -287,7 +309,7 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText"
-                           Text="Ready — press F7 or Check to spell-check."
+                           Text="Ready"
                            TextWrapping="Wrap"
                            VerticalAlignment="Center"/>
                 <TextBlock x:Name="CountBadge"

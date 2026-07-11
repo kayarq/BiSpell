@@ -1,15 +1,14 @@
-using BiSpell.Services;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using WinRT.Interop;
 
 namespace BiSpell;
 
 /// <summary>
 /// WinUI 3 application entry — thin shell over bispell_core (P/Invoke).
-/// Owns tray icon lifecycle. Closing the main window hides to tray unless the
-/// user chose Quit (or there is no tray). Editor-only spell-check product —
-/// no global hotkey / UIA / out-of-app clipboard utility.
+/// Editor-only Notes + spell product (no global hotkey / UIA / out-of-app clipboard).
+/// No system tray: closing the main window always fully quits (persist, dispose
+/// window resources via Closed, then Environment.Exit) so no orphan process remains.
+/// Quieter Defender / SmartScreen story for an unsigned Notes app.
 ///
 /// Startup failure path (W2 Mandate B): log type+message+stack, write
 /// %TEMP%\BiSpell-startup.status fail:…, MessageBox only when not smoke, Environment.Exit(1).
@@ -17,7 +16,6 @@ namespace BiSpell;
 public partial class App : Application
 {
     private MainWindow? _window;
-    private TrayIconService? _tray;
     private bool _isQuitting;
 
     public App()
@@ -58,10 +56,13 @@ public partial class App : Application
         };
     }
 
-    /// <summary>Shared app instance for window/tray coordination.</summary>
+    /// <summary>Shared app instance for window / quit coordination.</summary>
     public static new App Current => (App)Application.Current;
 
     public MainWindow? MainWindow => _window;
+
+    /// <summary>True while <see cref="Quit"/> is tearing down (re-entrancy gate).</summary>
+    public bool IsQuitting => _isQuitting;
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -86,21 +87,10 @@ public partial class App : Application
             return;
         }
 
-        try
-        {
-            _tray = new TrayIconService();
-            _tray.ShowWindowRequested += (_, _) => ShowMainWindow();
-            _tray.QuitRequested += (_, _) => Quit();
-        }
-        catch (Exception ex)
-        {
-            // Tray is nice-to-have; app still runs without it. Log but do not fail startup.
-            CrashLog.Write("Tray init failed (non-fatal): " + ex);
-            System.Diagnostics.Debug.WriteLine($"Tray init failed: {ex.Message}");
-            _tray = null;
-        }
+        // Tray intentionally not created (v0.2.1 Mandate B): close = full process exit.
+        // No Shell_NotifyIcon / message-only HWND — quieter unsigned-app Defender story.
 
-        // Intercept close: hide to tray instead of exit (when tray is available).
+        // Intercept close: always full Quit (never hide-to-tray).
         try
         {
             _window.AppWindow.Closing += OnMainWindowClosing;
@@ -114,66 +104,30 @@ public partial class App : Application
 
     private void OnMainWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
     {
-        if (_isQuitting || _tray is null)
-        {
-            // Allow real close / process exit path.
+        // Already in Quit → allow the real close so Closed dispose + Exit can finish.
+        if (_isQuitting)
             return;
-        }
 
-        // Hide to notification area instead of quitting.
+        // Cancel the default close and run ordered teardown (persist → Close → Exit).
+        // Never Hide() / minimize-to-tray.
         args.Cancel = true;
-        try
-        {
-            // Persist settings + active note even when only hiding.
-            _window?.PersistSettings();
-            _window?.PersistActiveNote();
-            sender.Hide();
-        }
-        catch
-        {
-            // If hide fails, force quit on next close.
-            _isQuitting = true;
-        }
-    }
-
-    public void ShowMainWindow()
-    {
-        if (_window is null) return;
-        try
-        {
-            var hwnd = WindowNative.GetWindowHandle(_window);
-            var id = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-            var appWindow = AppWindow.GetFromWindowId(id);
-            appWindow.Show();
-            _window.Activate();
-        }
-        catch
-        {
-            try
-            {
-                _window.AppWindow.Show();
-                _window.Activate();
-            }
-            catch
-            {
-                try { _window.Activate(); } catch { /* ignore */ }
-            }
-        }
+        Quit();
     }
 
     /// <summary>
-    /// Clean shutdown: save settings + note, dispose tray, close window, exit process 0.
+    /// Clean shutdown: save settings + note, unhook Closing, close window (Closed
+    /// disposes debouncer / popup / engine), then Environment.Exit(0).
+    /// Single intentional full-exit API (besides startup Exit(1)).
     /// </summary>
     public void Quit()
     {
         if (_isQuitting) return;
         _isQuitting = true;
 
+        try { CrashLog.Write("Quit"); } catch { /* ignore */ }
+
         try { _window?.PersistSettings(); } catch { /* ignore */ }
         try { _window?.PersistActiveNote(); } catch { /* ignore */ }
-
-        try { _tray?.Dispose(); } catch { /* ignore */ }
-        _tray = null;
 
         try
         {

@@ -9,7 +9,7 @@
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
     <!-- Do NOT enable UseWindowsForms — it routes App.xaml through WPF WinFX (MC6000).
-         Tray uses pure Win32 Shell_NotifyIcon in TrayIconService. -->
+         No WinForms NotifyIcon / tray; close = full process quit (v0.2.1). -->
     <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>false</UseWPF>
     <WinUISDKReferences>false</WinUISDKReferences>

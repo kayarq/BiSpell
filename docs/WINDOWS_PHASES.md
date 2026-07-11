@@ -10,7 +10,7 @@ Checklist for the fork-friendly Windows path under [`windows/`](../windows/). ma
 | **U2** | Portable core — models, tokenizer, dictionary | ✅ | C++17 `bispell_core`; Linux `ctest` |
 | **U3** | SpellEngine, language heuristics, lexicon, settings | ✅ | C ABI (`c_api.h`); lexicon under AppData / injectable paths |
 | **U4** | WinUI 3 shell — check / suggest / apply | ✅ | C# WinUI 3 + P/Invoke; unpackaged F5 |
-| **U5** | Settings persistence, tray, Windows paths | ✅ | `settings.json`, tray show/quit, hide-to-tray |
+| **U5** | Settings persistence, Windows paths | ✅ | `settings.json` + AppData; tray/hide-to-tray **removed** in v0.2.1 (close = full quit) |
 | **U6** | UI Automation (historical optional probe) | ✅ subsumed | Phase 3 productizes hotkey ValuePattern UIA + probe button (not always-on overlay) |
 | **U7** | Integration glue, dictionary packaging, CI notes | ✅ | Docs finalize, SoT note, Linux CI workflow, CMake top-level |
 | **P2** | Global hotkey + clipboard batch fix | ✅ | Ctrl+Alt+. / Win+Shift+.; `BISPELL_SMOKE` skips hotkey |
@@ -73,8 +73,8 @@ Dictionaries: copied from SoT by the csproj into output `Dictionaries\`. Optiona
 4. **F7** / **Check** → misspellings include `recieve`, `merhabaa`.
 5. Select `recieve` → suggestions (prefer including `receive`) → **Apply** / Enter / double-click.
 6. **Add to dictionary** on a nonsense token → re-check clean.
-7. Toggle TR/EN / max suggestions → quit → relaunch → settings persist (`%APPDATA%\BiSpell\settings.json`).
-8. Tray: **Show BiSpell** / **Quit**; close window hides to tray.
+7. Toggle TR/EN / max suggestions (under **Advanced**) → close window → relaunch → settings persist (`%APPDATA%\BiSpell\settings.json`).
+8. Close (**X** / Alt+F4): process exits fully; no tray icon remains.
 
 Full detail: [`windows/README.md`](../windows/README.md), [`docs/WINDOWS.md`](WINDOWS.md).
 
@@ -147,7 +147,7 @@ There is **no** required Windows runner for MVP gate. Documented manual checklis
 
 - Notes / templates / locks / taxonomy / markdown library
 - Continuous system-wide UI Automation monitoring or overlay underlines (Phase 3 is **hotkey-triggered** ValuePattern only)
-- WPF / WinForms full UI port (tray may use WinForms `NotifyIcon` only)
+- WPF / WinForms full UI port; system tray / hide-to-tray (removed v0.2.1)
 - Full libhunspell affix engine
 - Deleting Swift or dual-maintaining divergent dictionary blobs
 
