@@ -150,6 +150,78 @@ public sealed class BispellEngine : IDisposable
                 : "remove_from_dictionary failed");
     }
 
+    public void UnignoreWord(string word)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrEmpty(word)) return;
+        int rc = NativeMethods.bispell_engine_unignore_word(_handle, word);
+        if (rc != 0)
+            throw new BispellException(NativeString.LastError() is { Length: > 0 } e
+                ? e
+                : "unignore_word failed");
+    }
+
+    /// <summary>
+    /// Live personal-dictionary words (sorted). Empty list does not throw.
+    /// </summary>
+    public IReadOnlyList<string> ListAddedWords()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        int rc = NativeMethods.bispell_engine_list_added_words(
+            _handle,
+            out IntPtr list,
+            out UIntPtr count);
+
+        if (rc != 0)
+        {
+            var err = NativeString.LastError();
+            throw new BispellException(
+                string.IsNullOrEmpty(err) ? $"list_added_words failed (code {rc})." : err);
+        }
+
+        try
+        {
+            return NativeString.ReadStringList(list, count);
+        }
+        finally
+        {
+            if (list != IntPtr.Zero)
+                NativeMethods.bispell_string_list_free(list, count);
+        }
+    }
+
+    /// <summary>
+    /// Live ignored words (sorted). Empty list does not throw.
+    /// Does not include per-app ignoredInApps entries.
+    /// </summary>
+    public IReadOnlyList<string> ListIgnoredWords()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        int rc = NativeMethods.bispell_engine_list_ignored_words(
+            _handle,
+            out IntPtr list,
+            out UIntPtr count);
+
+        if (rc != 0)
+        {
+            var err = NativeString.LastError();
+            throw new BispellException(
+                string.IsNullOrEmpty(err) ? $"list_ignored_words failed (code {rc})." : err);
+        }
+
+        try
+        {
+            return NativeString.ReadStringList(list, count);
+        }
+        finally
+        {
+            if (list != IntPtr.Zero)
+                NativeMethods.bispell_string_list_free(list, count);
+        }
+    }
+
     public void UpdateSettings(BispellSettings settings)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

@@ -137,6 +137,23 @@ internal static class NativeMethods
         [MarshalAs(UnmanagedType.LPUTF8Str)] string word);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int bispell_engine_unignore_word(
+        IntPtr engine,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string word);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int bispell_engine_list_added_words(
+        IntPtr engine,
+        out IntPtr outList,
+        out UIntPtr outCount);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int bispell_engine_list_ignored_words(
+        IntPtr engine,
+        out IntPtr outList,
+        out UIntPtr outCount);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int bispell_engine_update_settings(
         IntPtr engine,
         in BispellSettings settings);
