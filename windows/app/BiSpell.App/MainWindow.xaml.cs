@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using BiSpell.Interop;
 using BiSpell.Models;
 using BiSpell.Services;
@@ -22,8 +23,9 @@ namespace BiSpell;
 ///
 /// As-you-type (P4 polish): length-aware scheduling —
 /// delete → hide popup + QuietRecheck after max(debounce, 450);
-/// insert letter/digit → no schedule (avoids UI freeze mid-word);
+/// insert letter/digit → cancel pending (space-debounced work must not fire mid-word);
 /// insert whitespace/punct or same-length replace → FullAsYouType (list + popup);
+/// live Check runs off the UI thread; results applied only if still current.
 /// programmatic text sets use <c>_suppressAsYouType</c>; smoke no-ops.
 ///
 /// Editor-only product: no global hotkey, UIA, or out-of-app clipboard utility.
@@ -75,6 +77,11 @@ public sealed partial class MainWindow : Window
     /// false → list update only (no popup open).
     /// </summary>
     private bool _asYouTypeWantPopup;
+
+    /// <summary>
+    /// Bumped when the user keeps typing so in-flight background checks are discarded.
+    /// </summary>
+    private int _asYouTypeGeneration;
 
     // ---- Notes MVP ----
     private readonly NotesStore _notesStore = new();
@@ -1084,8 +1091,192 @@ public sealed partial class MainWindow : Window
         if (_engine is null) return;
         if (!_settings.IsEnabled) return;
 
+        // A prior Check is still on a worker (or F7). Retry shortly so we don't drop a word-boundary fire.
+        if (_checkBusy)
+        {
+            try { _editorSpellDebouncer?.Schedule(OnAsYouTypeFire, 50); }
+            catch { /* ignore */ }
+            return;
+        }
+
         bool wantPopup = _asYouTypeWantPopup;
-        RunCheckCore(interactiveStatus: false, asYouType: true, wantPopup: wantPopup);
+        // Engine Check off UI thread so a completed-word recheck never freezes typing.
+        RunAsYouTypeCheckBackground(wantPopup);
+    }
+
+    /// <summary>
+    /// Capture editor snapshot on UI thread, run <see cref="BispellEngine.Check"/> on a
+    /// worker, apply list/popup only if the generation is still current.
+    /// </summary>
+    private void RunAsYouTypeCheckBackground(bool wantPopup)
+    {
+        if (_checkBusy) return;
+        if (_engine is null) return;
+
+        _checkBusy = true;
+        int generation = _asYouTypeGeneration;
+
+        try
+        {
+            ApplySettingsToEngine();
+
+            var text = EditorBox?.Text ?? string.Empty;
+            int caret = 0;
+            try { caret = EditorBox?.SelectionStart ?? 0; }
+            catch { caret = 0; }
+            if (caret < 0) caret = 0;
+            if (caret > text.Length) caret = text.Length;
+
+            bool nearCaretOnly = EditorSpellDebouncer.ShouldUseNearCaret(text.Length);
+            int windowRadius = nearCaretOnly ? NearCaretWindowRadius : 120;
+            var engine = _engine;
+            var dispatcher = DispatcherQueue;
+
+            _ = Task.Run(() =>
+            {
+                IReadOnlyList<MisspellingItem>? misspellings = null;
+                Exception? error = null;
+                try
+                {
+                    misspellings = engine.Check(
+                        text,
+                        caretUtf16: caret,
+                        nearCaretOnly: nearCaretOnly,
+                        windowRadius: windowRadius);
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+
+                bool enqueued = dispatcher.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        // Stale: user typed again (or closed) while Check was running.
+                        if (generation != _asYouTypeGeneration)
+                            return;
+                        if (_suppressAsYouType || !_settings.AsYouTypeEnabled)
+                            return;
+                        if (error is not null)
+                        {
+                            CrashLog.Write("as-you-type check failed: " + error.Message);
+                            return;
+                        }
+                        if (misspellings is null)
+                            return;
+
+                        ApplyAsYouTypeResults(misspellings, caret, wantPopup, nearCaretOnly);
+                    }
+                    finally
+                    {
+                        // Always release — even for stale gens — so we never stick busy=true.
+                        // A newer run only starts after busy is false (see OnAsYouTypeFire retry).
+                        _checkBusy = false;
+                    }
+                });
+
+                if (!enqueued)
+                    _checkBusy = false;
+            });
+        }
+        catch (Exception ex)
+        {
+            _checkBusy = false;
+            CrashLog.Write("as-you-type background start failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>UI-thread apply of a background as-you-type check result.</summary>
+    private void ApplyAsYouTypeResults(
+        IReadOnlyList<MisspellingItem> misspellings,
+        int caret,
+        bool wantPopup,
+        bool nearCaretOnly)
+    {
+        _suppressMissListSideEffects = true;
+        try
+        {
+            if (MisspellingsList is not null)
+                MisspellingsList.ItemsSource = misspellings;
+
+            var nearest = FindNearestMisspelling(misspellings, caret);
+            _selectedMisspelling = nearest;
+
+            IReadOnlyList<string> suggestions = Array.Empty<string>();
+            if (nearest is not null)
+            {
+                suggestions = nearest.Suggestions;
+                if (suggestions.Count == 0 && _engine is not null && wantPopup)
+                {
+                    try
+                    {
+                        suggestions = _engine.Suggestions(nearest.Word, nearest.Language);
+                    }
+                    catch (Exception ex)
+                    {
+                        _lastError = ex.Message;
+                    }
+                }
+            }
+
+            if (wantPopup && SuggestionsList is not null)
+            {
+                SuggestionsList.ItemsSource = suggestions.Count > 0 ? suggestions : null;
+                if (suggestions.Count > 0)
+                    SuggestionsList.SelectedIndex = 0;
+            }
+
+            UpdateActionButtons();
+
+            int n = misspellings.Count;
+            if (!_settings.IsEnabled)
+            {
+                try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                SetStatus("Live: spell-check disabled — empty result.", 0);
+            }
+            else
+            {
+                if (wantPopup)
+                {
+                    SetStatus(
+                        n == 0
+                            ? "Live: no misspellings."
+                            : $"Live: {n} misspelling{(n == 1 ? "" : "s")}"
+                              + (nearCaretOnly ? " (near caret)" : "")
+                              + (nearest is not null ? $" — “{nearest.Word}”." : "."),
+                        n);
+                }
+
+                if (wantPopup
+                    && _settings.AsYouTypeEnabled
+                    && nearest is not null
+                    && suggestions.Count > 0
+                    && !CrashLog.IsSmokeMode)
+                {
+                    try { _suggestionPopup?.Show(nearest, suggestions); }
+                    catch (Exception ex)
+                    {
+                        CrashLog.Write("as-you-type popup Show failed: " + ex.Message);
+                    }
+                }
+                else if (!wantPopup)
+                {
+                    // Quiet path: leave an existing popup alone (delete already Hide()'d).
+                }
+                else
+                {
+                    try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                }
+            }
+
+            if (ErrorBar is not null)
+                ErrorBar.IsOpen = false;
+        }
+        finally
+        {
+            _suppressMissListSideEffects = false;
+        }
     }
 
     /// <summary>
@@ -1103,6 +1294,15 @@ public sealed partial class MainWindow : Window
         _asYouTypeWantPopup = wantPopup;
         int ms = debounceOverrideMs ?? _settings.DebounceMilliseconds;
         _editorSpellDebouncer.Schedule(OnAsYouTypeFire, ms);
+    }
+
+    /// <summary>
+    /// Drop any pending/in-flight live check so mid-word typing never applies a stale freeze-y result.
+    /// </summary>
+    private void CancelPendingAsYouType()
+    {
+        _asYouTypeGeneration++;
+        try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
     }
 
     private void EditorBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -1138,24 +1338,56 @@ public sealed partial class MainWindow : Window
         {
             if (len < prev)
             {
-                // Delete / backspace: never spell-check mid-delete (UI-thread Check freezes typing).
-                // Hide popup; after a long settle, quiet list-only recheck.
+                // Delete / backspace: never apply mid-delete; hide popup; quiet settle recheck.
                 try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
-                try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
+                CancelPendingAsYouType();
                 int settle = Math.Max(_settings.DebounceMilliseconds, DeleteSettleMilliseconds);
                 ScheduleAsYouTypeCheck(wantPopup: false, debounceOverrideMs: settle);
             }
             else if (len > prev)
             {
-                char last = text[len - 1];
-                // Mid-word typing: do NOT schedule spell check at all.
-                // Synchronous Check() on the UI thread was freezing forward typing.
-                // Only recheck when the user finishes a word (whitespace/punctuation).
-                if (char.IsWhiteSpace(last) || char.IsPunctuation(last))
+                // Prefer caret-relative char (mid-document typing); fall back to document end.
+                char inserted = '\0';
+                bool haveInserted = false;
+                try
+                {
+                    int caret = EditorBox?.SelectionStart ?? len;
+                    if (len == prev + 1 && caret > 0 && caret <= len)
+                    {
+                        inserted = text[caret - 1];
+                        haveInserted = true;
+                    }
+                    else if (len == prev + 1 && len > 0)
+                    {
+                        inserted = text[len - 1];
+                        haveInserted = true;
+                    }
+                }
+                catch
+                {
+                    if (len > 0)
+                    {
+                        inserted = text[len - 1];
+                        haveInserted = true;
+                    }
+                }
+
+                if (haveInserted && (char.IsLetterOrDigit(inserted) || inserted is '\'' or '’' or '-'))
+                {
+                    // Mid-word: cancel any space-debounced timer / in-flight Check so
+                    // forward typing never hits a freeze from a pending fire or popup.
+                    CancelPendingAsYouType();
+                    try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                }
+                else if (haveInserted && (char.IsWhiteSpace(inserted) || char.IsPunctuation(inserted)))
                 {
                     ScheduleAsYouTypeCheck(wantPopup: true);
                 }
-                // letter/digit or other: no schedule — wait for word boundary or F7
+                else
+                {
+                    // Paste / multi-char insert → full after debounce.
+                    ScheduleAsYouTypeCheck(wantPopup: true);
+                }
             }
             else
             {
