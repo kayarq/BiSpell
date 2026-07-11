@@ -9,6 +9,7 @@ public static class AppPaths
     public const string AppFolderName = "BiSpell";
     public const string SettingsFileName = "settings.json";
     public const string LexiconFileName = "user-lexicon.json";
+    public const string NotesFolderName = "Notes";
 
     /// <summary>%APPDATA%\BiSpell\ — creates the directory when possible.</summary>
     public static string ConfigDirectory
@@ -41,4 +42,23 @@ public static class AppPaths
     public static string SettingsPath => Path.Combine(ConfigDirectory, SettingsFileName);
 
     public static string LexiconPath => Path.Combine(ConfigDirectory, LexiconFileName);
+
+    /// <summary>%APPDATA%\BiSpell\Notes\ — plain-text note files for the in-app Notes MVP.</summary>
+    public static string NotesDirectory
+    {
+        get
+        {
+            var dir = Path.Combine(ConfigDirectory, NotesFolderName);
+            try
+            {
+                Directory.CreateDirectory(dir);
+            }
+            catch
+            {
+                // Best-effort; callers handle missing dir.
+            }
+
+            return dir;
+        }
+    }
 }

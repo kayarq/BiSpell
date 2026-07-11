@@ -1,5 +1,4 @@
 using BiSpell.Services;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using WinRT.Interop;
@@ -8,23 +7,17 @@ namespace BiSpell;
 
 /// <summary>
 /// WinUI 3 application entry — thin shell over bispell_core (P/Invoke).
-/// Owns tray icon + global clipboard-utility hotkey lifecycle. Closing the main
-/// window hides to tray unless the user chose Quit (or there is no tray).
-/// Still no system-wide other-app injection.
+/// Owns tray icon lifecycle. Closing the main window hides to tray unless the
+/// user chose Quit (or there is no tray). Editor-only spell-check product —
+/// no global hotkey / UIA / out-of-app clipboard utility.
 ///
 /// Startup failure path (W2 Mandate B): log type+message+stack, write
 /// %TEMP%\BiSpell-startup.status fail:…, MessageBox only when not smoke, Environment.Exit(1).
-///
-/// Phase 2/3 (P2/P3-GLUE): when <see cref="AppUserSettings.GlobalHotkeyEnabled"/> and not
-/// smoke, registers <see cref="GlobalHotkeyService"/>; HotkeyPressed → UI dispatcher →
-/// <see cref="MainWindow.HandleUtilityHotkey"/> (UIA-first + clipboard orchestrator).
-/// Settings toggle re-registers without restart. Smoke (<c>BISPELL_SMOKE=1</c>) never registers.
 /// </summary>
 public partial class App : Application
 {
     private MainWindow? _window;
     private TrayIconService? _tray;
-    private GlobalHotkeyService? _hotkey;
     private bool _isQuitting;
 
     public App()
@@ -70,9 +63,6 @@ public partial class App : Application
 
     public MainWindow? MainWindow => _window;
 
-    /// <summary>Active hotkey binding display (e.g. Ctrl+Alt+.), or null if unregistered.</summary>
-    public string? ActiveHotkeyBinding => _hotkey?.ActiveBindingDisplay;
-
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         CrashLog.Write("OnLaunched");
@@ -110,18 +100,6 @@ public partial class App : Application
             _tray = null;
         }
 
-        // P2-GLUE: global hotkey after MainWindow + tray (non-fatal; smoke never registers).
-        try
-        {
-            InitGlobalHotkey();
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("Hotkey init failed (non-fatal): " + ex);
-            System.Diagnostics.Debug.WriteLine($"Hotkey init failed: {ex.Message}");
-            DisposeHotkeyService();
-        }
-
         // Intercept close: hide to tray instead of exit (when tray is available).
         try
         {
@@ -132,143 +110,6 @@ public partial class App : Application
             CrashLog.Write("AppWindow.Closing hook failed (non-fatal): " + ex.Message);
             System.Diagnostics.Debug.WriteLine($"AppWindow.Closing hook failed: {ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// Create hotkey service and register when settings allow.
-    /// Smoke: log and skip RegisterHotKey entirely (defense-in-depth with service).
-    /// </summary>
-    private void InitGlobalHotkey()
-    {
-        if (CrashLog.IsSmokeMode)
-        {
-            CrashLog.Write("hotkey skipped (BISPELL_SMOKE)");
-            _window?.UpdateHotkeyBindingCaption(null, registered: false, smoke: true);
-            return;
-        }
-
-        _hotkey = new GlobalHotkeyService();
-        _hotkey.HotkeyPressed += OnGlobalHotkeyPressed;
-        SyncGlobalHotkeyFromSettings();
-    }
-
-    private void OnGlobalHotkeyPressed(object? sender, EventArgs e)
-    {
-        // Marshal to WinUI dispatcher: engine + editor + clipboard GLUE run on UI thread.
-        try
-        {
-            DispatcherQueue? dq = _window?.DispatcherQueue;
-            if (dq is null)
-            {
-                CrashLog.Write("hotkey pressed but MainWindow dispatcher unavailable");
-                return;
-            }
-
-            bool enqueued = dq.TryEnqueue(DispatcherQueuePriority.Normal, () =>
-            {
-                try
-                {
-                    _window?.HandleUtilityHotkey();
-                }
-                catch (Exception ex)
-                {
-                    CrashLog.Write("HandleUtilityHotkey: " + ex);
-                }
-            });
-
-            if (!enqueued)
-                CrashLog.Write("hotkey: DispatcherQueue.TryEnqueue returned false");
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("OnGlobalHotkeyPressed: " + ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Register or unregister the global hotkey from current MainWindow settings.
-    /// Called at launch and when the Global hotkey checkbox toggles (no restart).
-    /// No-op in smoke mode.
-    /// </summary>
-    public void SyncGlobalHotkeyFromSettings()
-    {
-        if (CrashLog.IsSmokeMode)
-        {
-            CrashLog.Write("hotkey skipped (BISPELL_SMOKE)");
-            _window?.UpdateHotkeyBindingCaption(null, registered: false, smoke: true);
-            return;
-        }
-
-        bool wantEnabled = _window?.IsGlobalHotkeyEnabled ?? true;
-
-        try
-        {
-            if (_hotkey is null)
-            {
-                if (!wantEnabled)
-                {
-                    _window?.UpdateHotkeyBindingCaption(null, registered: false, smoke: false);
-                    return;
-                }
-
-                _hotkey = new GlobalHotkeyService();
-                _hotkey.HotkeyPressed += OnGlobalHotkeyPressed;
-            }
-
-            if (wantEnabled)
-            {
-                bool ok = _hotkey.TryRegister();
-                string? binding = _hotkey.ActiveBindingDisplay;
-                if (ok)
-                    CrashLog.Write($"hotkey active: {binding ?? "?"}");
-                else
-                    CrashLog.Write("hotkey unavailable (register failed)");
-                _window?.UpdateHotkeyBindingCaption(binding, registered: ok, smoke: false);
-            }
-            else
-            {
-                _hotkey.Unregister();
-                CrashLog.Write("hotkey disabled by settings");
-                _window?.UpdateHotkeyBindingCaption(null, registered: false, smoke: false);
-            }
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("SyncGlobalHotkeyFromSettings: " + ex);
-            _window?.UpdateHotkeyBindingCaption(null, registered: false, smoke: false);
-        }
-    }
-
-    /// <summary>Tray balloon (or tip fallback). Never throws.</summary>
-    public void ShowTrayBalloon(string title, string text, int timeoutMs = 2500)
-    {
-        try
-        {
-            _tray?.ShowBalloon(title, text, timeoutMs);
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("ShowTrayBalloon: " + ex.Message);
-        }
-    }
-
-    private void DisposeHotkeyService()
-    {
-        if (_hotkey is null) return;
-        try
-        {
-            _hotkey.HotkeyPressed -= OnGlobalHotkeyPressed;
-        }
-        catch { /* ignore */ }
-        try
-        {
-            _hotkey.Dispose();
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("hotkey dispose: " + ex.Message);
-        }
-        _hotkey = null;
     }
 
     private void OnMainWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -283,8 +124,9 @@ public partial class App : Application
         args.Cancel = true;
         try
         {
-            // Persist settings even when only hiding.
+            // Persist settings + active note even when only hiding.
             _window?.PersistSettings();
+            _window?.PersistActiveNote();
             sender.Hide();
         }
         catch
@@ -320,8 +162,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Clean shutdown: save settings, dispose hotkey + tray, close window, exit process 0.
-    /// Hotkey is unregistered before exit so other apps can claim the combo.
+    /// Clean shutdown: save settings + note, dispose tray, close window, exit process 0.
     /// </summary>
     public void Quit()
     {
@@ -329,9 +170,7 @@ public partial class App : Application
         _isQuitting = true;
 
         try { _window?.PersistSettings(); } catch { /* ignore */ }
-
-        // Unregister hotkey before tearing down UI so WM_HOTKEY cannot re-enter mid-quit.
-        DisposeHotkeyService();
+        try { _window?.PersistActiveNote(); } catch { /* ignore */ }
 
         try { _tray?.Dispose(); } catch { /* ignore */ }
         _tray = null;

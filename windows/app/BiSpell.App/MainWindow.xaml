@@ -5,9 +5,10 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:BiSpell"
     xmlns:models="using:BiSpell.Models"
-    Title="BiSpell — Spell Check">
+    xmlns:services="using:BiSpell.Services"
+    Title="BiSpell — Notes">
 
-    <Grid x:Name="RootGrid" Padding="16" RowSpacing="12" ColumnSpacing="12"
+    <Grid x:Name="RootGrid" Padding="12" RowSpacing="10" ColumnSpacing="10"
           Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
           KeyDown="RootGrid_KeyDown">
         <Grid.RowDefinitions>
@@ -18,15 +19,16 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200" MinWidth="160"/>
             <ColumnDefinition Width="2*"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Header + toolbar + settings -->
-        <StackPanel Grid.Row="0" Grid.ColumnSpan="3" Spacing="8">
+        <!-- Header + toolbar + settings (span all columns) -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="4" Spacing="8">
             <TextBlock Text="BiSpell" Style="{StaticResource TitleTextBlockStyle}"/>
-            <TextBlock Text="TR + EN spelling assistant (Windows MVP). Not a Notes port. No system-wide injection."
+            <TextBlock Text="Notes + TR/EN spelling (in-app only). No system-wide hotkey or UIA injection."
                        Opacity="0.7" TextWrapping="Wrap"/>
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button x:Name="CheckButton" Content="Check (F7)" Click="CheckButton_Click"
@@ -37,6 +39,8 @@
                         IsEnabled="False"/>
                 <Button x:Name="IgnoreButton" Content="Ignore" Click="IgnoreButton_Click"
                         IsEnabled="False"/>
+                <Button x:Name="SaveNoteButton" Content="Save (Ctrl+S)" Click="SaveNoteButton_Click"
+                        MinWidth="120"/>
             </StackPanel>
 
             <!-- Daily-use settings card (saved to %APPDATA%\BiSpell\settings.json).
@@ -57,8 +61,6 @@
                                TextWrapping="Wrap"
                                Text="Saved to %APPDATA%\BiSpell\settings.json"/>
 
-                    <!-- Row 1: enable + languages + as-you-type (P4-SETTINGS shell-only).
-                         No IsChecked / Checked / Unchecked in XAML (W1). -->
                     <StackPanel Orientation="Horizontal" Spacing="16">
                         <CheckBox x:Name="EnabledCheck" Content="Spell-check enabled"/>
                         <CheckBox x:Name="TurkishCheck" Content="Turkish"/>
@@ -66,8 +68,6 @@
                         <CheckBox x:Name="AsYouTypeCheck" Content="As-you-type check"/>
                     </StackPanel>
 
-                    <!-- Row 2: numeric limits with captions (max suggestions / min word / debounce).
-                         Structure only: no Value / ValueChanged in XAML (W1). -->
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <TextBlock Text="Max suggestions" VerticalAlignment="Center"/>
@@ -106,64 +106,69 @@
                                            LargeChange="250"
                                            Width="120"/>
                             </StackPanel>
-                            <TextBlock Text="Wait after typing before re-checking."
+                            <TextBlock Text="Applies after typing pause / after delete settle."
                                        Style="{StaticResource CaptionTextBlockStyle}"
                                        Opacity="0.65"
                                        TextWrapping="Wrap"/>
                         </StackPanel>
                     </StackPanel>
-
-                    <!-- Row 3: hotkey utility (shell-only; P2-SETTINGS + P3-SETTINGS).
-                         No IsChecked / Checked / Unchecked in XAML (W1). -->
-                    <TextBlock Text="Hotkey utility"
-                               Style="{StaticResource BodyStrongTextBlockStyle}"
-                               Margin="0,4,0,0"/>
-                    <StackPanel Orientation="Horizontal" Spacing="16">
-                        <CheckBox x:Name="GlobalHotkeyCheck" Content="Global hotkey"/>
-                        <CheckBox x:Name="ClipboardReplaceCheck" Content="Clipboard replace"/>
-                        <CheckBox x:Name="UiaAssistCheck" Content="UIA assist"/>
-                    </StackPanel>
-                    <TextBlock x:Name="HotkeyBindingCaption"
-                               Text="Global hotkey: Ctrl+Alt+. (fallback Win+Shift+.) — registers at launch when enabled"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Opacity="0.65"
-                               TextWrapping="Wrap"/>
-                    <!-- P3-PROBE: structure only (Click wired in code-behind). Soft-fail UIA probe. -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="ProbeFocusedButton"
-                                Content="Probe focused control"
-                                Click="ProbeFocusedButton_Click"
-                                MinWidth="160"/>
-                        <TextBlock Text="Logs UIA tier / control / process to status + CrashLog (no modal)."
-                                   Style="{StaticResource CaptionTextBlockStyle}"
-                                   Opacity="0.65"
-                                   TextWrapping="Wrap"
-                                   VerticalAlignment="Center"/>
-                    </StackPanel>
                 </StackPanel>
             </Border>
         </StackPanel>
 
-        <!-- Text editor -->
+        <!-- Notes sidebar -->
         <Grid Grid.Row="1" Grid.Column="0" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="Notes" Style="{StaticResource SubtitleTextBlockStyle}"/>
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6">
+                <Button x:Name="NewNoteButton" Content="New" Click="NewNoteButton_Click"
+                        MinWidth="64"/>
+                <Button x:Name="DeleteNoteButton" Content="Delete" Click="DeleteNoteButton_Click"
+                        MinWidth="72" IsEnabled="False"/>
+            </StackPanel>
+            <ListView x:Name="NotesList"
+                      Grid.Row="2"
+                      SelectionMode="Single"
+                      SelectionChanged="NotesList_SelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="services:NoteItem">
+                        <StackPanel Padding="4,6" Spacing="2">
+                            <TextBlock Text="{x:Bind Title}" TextWrapping="WrapNoWrap"
+                                       TextTrimming="CharacterEllipsis"
+                                       FontWeight="SemiBold"/>
+                            <TextBlock Text="{x:Bind FileName}" Opacity="0.55" FontSize="11"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- Note editor -->
+        <Grid Grid.Row="1" Grid.Column="1" RowSpacing="6">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Text="Text" Style="{StaticResource SubtitleTextBlockStyle}"/>
+            <TextBlock x:Name="EditorHeader"
+                       Text="Note"
+                       Style="{StaticResource SubtitleTextBlockStyle}"/>
             <TextBox x:Name="EditorBox"
                      Grid.Row="1"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
-                     PlaceholderText="Paste or type text… e.g. I recieve mail. merhabaa dünya"
+                     PlaceholderText="Write a note… first line becomes the title"
                      FontFamily="Segoe UI"
-                     FontSize="15"
-                     Text="I recieve mail today. merhabaa dünya."/>
+                     FontSize="15"/>
         </Grid>
 
         <!-- Misspellings -->
-        <Grid Grid.Row="1" Grid.Column="1" RowSpacing="6">
+        <Grid Grid.Row="1" Grid.Column="2" RowSpacing="6">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -186,7 +191,7 @@
         </Grid>
 
         <!-- Suggestions -->
-        <Grid Grid.Row="1" Grid.Column="2" RowSpacing="6">
+        <Grid Grid.Row="1" Grid.Column="3" RowSpacing="6">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -201,23 +206,20 @@
                       KeyDown="SuggestionsList_KeyDown"/>
         </Grid>
 
-        <!-- Lexicon management (P1-LEXUI Mandate A): live lists from engine via
-             ListAddedWords / ListIgnoredWords; Remove / Unignore mutate + refresh.
-             Collapsible Expander keeps the check layout compact; no new Window. -->
+        <!-- Lexicon management: collapsible -->
         <Expander x:Name="LexiconExpander"
-                  Grid.Row="2" Grid.ColumnSpan="3"
+                  Grid.Row="2" Grid.ColumnSpan="4"
                   Header="Personal dictionary &amp; ignored words"
-                  IsExpanded="True"
+                  IsExpanded="False"
                   HorizontalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch"
                   VerticalAlignment="Stretch">
-            <Grid Height="160" ColumnSpacing="12" Margin="0,8,0,0">
+            <Grid Height="140" ColumnSpacing="12" Margin="0,8,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Added words (personal dictionary) -->
                 <Grid Grid.Column="0" RowSpacing="6">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -240,7 +242,6 @@
                             MinWidth="120"/>
                 </Grid>
 
-                <!-- Ignored words -->
                 <Grid Grid.Column="1" RowSpacing="6">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -267,14 +268,14 @@
 
         <!-- Engine status / load error -->
         <InfoBar x:Name="ErrorBar"
-                 Grid.Row="3" Grid.ColumnSpan="3"
+                 Grid.Row="3" Grid.ColumnSpan="4"
                  IsOpen="False"
                  Severity="Error"
                  IsClosable="True"
                  Title="Engine error"/>
 
         <!-- Status line -->
-        <Border Grid.Row="4" Grid.ColumnSpan="3"
+        <Border Grid.Row="4" Grid.ColumnSpan="4"
                 Padding="8,6"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 CornerRadius="4"

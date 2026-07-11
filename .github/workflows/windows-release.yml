@@ -153,12 +153,12 @@ jobs:
           1. Unzip this folder anywhere (no installer).
           2. Prefer Run-BiSpell.cmd (shows errors). Or double-click BiSpell.App.exe.
           3. If nothing appears: open %TEMP%\BiSpell-startup.log
-          4. Paste text, press Check (or F7), apply suggestions.
+          4. Open a note, paste text, press Check (or F7), apply suggestions.
 
-          Data: %APPDATA%\BiSpell\ (settings + personal lexicon)
+          Data: %APPDATA%\BiSpell\ (settings, lexicon, Notes\)
 
           Requires: Windows 10 1809+ / Windows 11 (x64).
-          This is a spell-check shell — not the macOS Notes UI or system-wide AX.
+          In-app Notes + spell — not system-wide hotkey/UIA.
           "@ | Set-Content -Encoding UTF8 (Join-Path $out "README-WINDOWS.txt")
 
       - name: Zip package
@@ -336,10 +336,11 @@ jobs:
 
             ### Smoke test
             1. Run `BiSpell.App.exe`
-            2. Paste: `I recieve mail. merhabaa dünya`
+            2. Open a note / paste: `I recieve mail. merhabaa dünya`
             3. **Check** (or F7) → select typo → **Apply**
 
-            **Not included:** macOS Notes UI, system-wide Accessibility/UIA, templates.
+            **Includes:** in-app Notes (`%APPDATA%\BiSpell\Notes\`), as-you-type in the note editor.
+            **Not included:** system-wide hotkey/UIA, macOS templates/taxonomy.
           files: |
             dist/BiSpell-win-x64.zip
             dist/${{ needs.build-windows-x64.outputs.package_name }}.zip

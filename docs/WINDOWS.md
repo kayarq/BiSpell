@@ -19,15 +19,15 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 │         LanguageTagger (heuristics) │ UserLexicon │ Settings │
 │  tests/ ctest on Linux + Windows                            │
 │  app/   C# WinUI 3 shell ──► P/Invokes bispell_core.dll     │
-│         Check │ Suggest │ Apply │ Tray │ Settings           │
-│         Global hotkey (Ctrl+Alt+.) │ UIA assist + Clipboard │
-│         Editor as-you-type (debounced) + suggestion popup   │
+│         Notes sidebar │ Editor Check/Suggest/Apply          │
+│         Settings │ Tray │ As-you-type (debounced) + popup   │
+│         Editor-only (no global hotkey / UIA utility)        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 - **Core**: C++17 library (static for tests; shared `bispell_core` for P/Invoke). No WinRT/Win32 UI headers in public APIs.
 - **Ranges**: UTF-16 code unit offsets (parity with macOS `NSRange` for text APIs).
-- **UI**: C# WinUI 3 shell for the spell loop — **not** a SwiftUI Notes / taxonomy / templates port.
+- **UI**: C# WinUI 3 shell for in-app Notes + spell loop — **not** a full SwiftUI taxonomy / templates / AX port; **not** system-wide UIA.
 
 ## Stack choice
 
@@ -42,7 +42,7 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
 
 ## MVP vs non-goals
 
-### In scope (Windows MVP)
+### In scope (Windows product)
 
 1. Portable spell core reimplementing Swift logic for:
    - Models (`SpellLanguage`, `Misspelling`, ranges)
@@ -53,16 +53,16 @@ Windows work lives under [`windows/`](../windows/). Details for implementers and
    - UserLexicon + file store under `%APPDATA%\BiSpell\`
    - AppSettings subset (enabled, TR/EN, maxSuggestions, minWordLength, debounce)
 2. Bundled TR + EN dictionaries (shared source with macOS assets).
-3. WinUI 3 shell: multiline editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage** (remove / unignore), **min word length**, **persistent settings**, **system tray** (show / quit).
-4. **Phase 2 clipboard utility:** global hotkey (**Ctrl+Alt+.**, fallback **Win+Shift+.**), optional **clipboard replace** after top-suggestion apply, shell toggles in settings.
-5. **Phase 3 UIA assist:** on the same hotkey, prefer **focused-control ValuePattern** read/write when possible (Tier A/B), else Phase 2 clipboard (Tier C). Settings: `uiaAssistEnabled` (default true). Optional **Probe focused control** button. **Not** continuous monitoring / overlay underlines.
-6. **Phase 4 in-editor as-you-type:** debounced live check in the main editor only + suggestion popup (Enter / 1–5 / Esc). Settings: `asYouTypeEnabled` (default true), `debounceMilliseconds` (default 250, UI NumberBox). **Not** system-wide continuous monitoring.
-7. Docs and CMake so core tests run on Linux; app builds on a Windows host.
+3. WinUI 3 shell: **Notes sidebar** + note editor, run check, list misspellings, suggestions, apply, add/ignore, **lexicon manage**, **persistent settings**, **system tray** (show / quit).
+4. **As-you-type (in-note only):** length-aware debounce — quiet list recheck on delete / mid-word; full list + popup on word boundary / replace. Settings: `asYouTypeEnabled`, `debounceMilliseconds`. **Not** system-wide.
+5. **Notes MVP:** list / new / delete / select; plain `.txt` under `%APPDATA%\BiSpell\Notes\`; title from first non-empty line; Ctrl+S + auto-save on switch. No templates/locks/taxonomy/markdown preview.
+6. Docs and CMake so core tests run on Linux; app builds on a Windows host.
 
 ### Explicit non-goals
 
-- Notes window, templates, locks, taxonomy, markdown library, terminal themes.
-- Continuous system-wide Accessibility / UI Automation monitoring or overlay underlines in other apps (hotkey-triggered ValuePattern assist is in Phase 3; always-on is not).
+- Global hotkey, out-of-app clipboard replace utility, UIA assist / probe (removed from product surface).
+- Continuous system-wide Accessibility / UI Automation monitoring or overlay underlines in other apps.
+- macOS-parity templates, locks, taxonomy, markdown library, terminal themes.
 - WPF / WinForms / full SwiftUI-in-C# clone of the macOS UI.
 - Full libhunspell affix engine (unless proven drop-in superior without breaking parity tests).
 - macOS `SystemSpellSuggester` / `NSSpellChecker` equivalent on Windows MVP.
@@ -165,13 +165,15 @@ swift build -c release
 
 | File | Role |
 |------|------|
-| `settings.json` | Spell settings subset (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`) plus shell-only `globalHotkeyEnabled`, `clipboardReplaceEnabled`, `uiaAssistEnabled`, `asYouTypeEnabled` (utility flags + as-you-type default **true** when missing). Loaded at startup; saved when toggles change. |
+| `settings.json` | Spell settings (`isEnabled`, `turkishEnabled`, `englishEnabled`, `maxSuggestions`, `minWordLength`, `debounceMilliseconds`, `asYouTypeEnabled`). Older utility keys are ignored if present. Loaded at startup; saved when toggles change. |
 | `user-lexicon.json` | Personal dictionary + ignored words (engine `UserLexiconStore`). Survives relaunch. |
+| `Notes\*.txt` | Plain-text note bodies for the in-app Notes MVP. |
 
 Full path examples (per-user profile):
 
 - `%APPDATA%\BiSpell\settings.json`
 - `%APPDATA%\BiSpell\user-lexicon.json`
+- `%APPDATA%\BiSpell\Notes\`
 
 C++ path helpers: `bispell::paths::default_config_dir()`, `default_settings_path()`, `default_lexicon_path()` (Windows → `%APPDATA%\BiSpell\`; injectable override for tests).
 
@@ -213,116 +215,58 @@ Lists are live from the engine (`ListAddedWords` / `ListIgnoredWords`), not a ra
 
 ### Tray (notification area)
 
-- Unpackaged WinUI has no first-party tray control; the shell uses **WinForms `NotifyIcon`** (`UseWindowsForms` in the csproj).
+- Notification-area icon via Win32 `Shell_NotifyIcon` (no WinForms dependency).
 - Menu: **Show BiSpell** (activate main window), **Quit** (dispose tray + exit).
 - Double-click tray icon = show window.
 - Closing the main window **hides to tray** (does not quit); use **Quit** to exit cleanly.
-- Tray **balloon** (or tip fallback) reports utility results (Phase 2/3 — path `UIA` or `clipboard`).
-- Phase 3 adds **hotkey-triggered** focused-control UIA (ValuePattern), not continuous multi-app monitoring or overlay underlines.
+- No utility balloons for out-of-app hotkey (that surface was removed).
 
-### Phase 2 — global hotkey & clipboard utility
-
-Shell-only feature (not part of the native C ABI). Uses Win32 `RegisterHotKey` on a message-only HWND and `CF_UNICODETEXT` clipboard read/write. Still the **fallback** path for Phase 3 Tier C / UIA-off.
+### Notes MVP (Phase 5)
 
 | Piece | Behavior |
 |-------|----------|
-| **Primary hotkey** | **Ctrl+Alt+.** (`MOD_CONTROL\|MOD_ALT`, `VK_OEM_PERIOD`) |
-| **Fallback** | **Win+Shift+.** if primary registration fails |
-| **Global hotkey** checkbox | Default on; toggle re-registers / unregisters **without restart** |
-| **Clipboard replace** checkbox | Default on; when off, check + feedback only (clipboard not overwritten); also gates UIA SetValue auto-apply in Phase 3 |
-| Settings JSON | `globalHotkeyEnabled`, `clipboardReplaceEnabled` (missing keys → true) |
+| Layout | Left **Notes** list; center **note editor**; right misspellings + suggestions |
+| Title | First non-empty line of body (truncated), or **Untitled** |
+| Files | `%APPDATA%\BiSpell\Notes\*.txt` (UTF-8) |
+| New / Delete | Sidebar buttons; delete removes the file |
+| Save | **Ctrl+S** / **Save** button; auto-save when switching notes or hide/quit |
+| Spell | Same engine + F7 + as-you-type on the active note body |
 
-**How to use (clipboard-only / Phase 2)**
+Empty notes folder seeds a sample welcome note on first launch.
 
-1. **Copy** text with typos from any app.
-2. Press the registered combo (**Ctrl+Alt+.** or the caption’s fallback).
-3. BiSpell runs the full-field check with current languages/settings, applies top suggestions per misspelling, and (if replace is on) writes fixed text to the clipboard.
-4. **Paste** the corrected text.
-
-Caption under the settings toggles shows the live binding or a reason it is off / unavailable / skipped in smoke.
-
-**Headless smoke:** `windows/app/scripts/smoke-launch.ps1` sets **`BISPELL_SMOKE=1`** before launch. The app then **skips hotkey registration**, **skips UIA COM** on utility/probe paths, and skips MessageBox so GHA `smoke-windows-x64` never depends on interactive hotkeys/UIA or blocks on modals. Manual hotkey / UIA E2E remains a Windows-host checklist item only.
-
-### Phase 3 — UIA assist (focused control)
-
-On the **same global hotkey**, when **`uiaAssistEnabled`** is true (default), BiSpell tries **UI Automation** on the focused control **before** the Phase 2 clipboard path.
+### As-you-type (Phase 4 polish — note editor only)
 
 | Piece | Behavior |
 |-------|----------|
-| **UIA assist** checkbox | Default on; when off → pure Phase 2 clipboard |
-| Pattern MVP | **ValuePattern** read (`CurrentValue`) + write (`SetValue`) |
-| Replace policy | Same as Phase 2: apply all top suggestions via `ClipboardSpellFix`; no-suggestion words left alone |
-| Settings JSON | `uiaAssistEnabled` (missing key → true) |
-| Probe button | **Probe focused control** — status + CrashLog tier/control/process; no modal; disabled in smoke / engine offline |
+| **As-you-type check** | Shell-only `asYouTypeEnabled` (default **true**). Off → no TextChanged scheduling; F7 unchanged. |
+| **Debounce (ms)** | `debounceMilliseconds` (default **250**, clamp 0–5000). Caption: applies after typing pause / after delete settle. |
+| **Delete (length ↓)** | Hide popup immediately; cancel pending short timer; **QuietRecheck** after `max(debounce, 450)` ms — **list only**, no popup. |
+| **Insert letter/digit** | QuietRecheck after normal debounce (list only). |
+| **Insert whitespace/punct** or same-length replace | **FullAsYouType** after normal debounce (list + nearest + popup). |
+| Large text | If length &gt; ~4000 UTF-16 units, near-caret window (radius 256); F7 remains full-document. |
+| Popup keys | **Enter** / **1–5** apply; **Esc** dismiss. |
+| Programmatic text | Note load / apply use `_suppressAsYouType`. |
+| Smoke | `BISPELL_SMOKE=1` → no schedule / no timer arm. |
 
-#### Support tiers (A / B / C)
-
-| Tier | Capability | Examples | Hotkey outcome |
-|------|------------|----------|----------------|
-| **A** | ValuePattern **read + write** | Classic Notepad, many Win32 `EDIT` | In-place correction when auto-apply (Clipboard replace) is on; clipboard often untouched |
-| **B** | ValuePattern **read only** (or SetValue fails) | Some restricted / rich fields | Spell after UIA read; write via **clipboard** if replace on |
-| **C** | No access | Many Chromium/Electron fields, elevated apps, password, no focus / COM fail | **Identical** Phase 2 clipboard path |
-
-#### Manual Notepad test (Tier A)
-
-1. Enable **Global hotkey**, **UIA assist**, **Clipboard replace**.
-2. Open Notepad, type: `I recieve mail. merhabaa dünya`
-3. Keep caret in Notepad; press **Ctrl+Alt+.** (or registered fallback).
-4. Expect in-place fix (`receive`, `merhaba`); status/tray mention UIA path and counts.
-5. Optional: click **Probe focused control** after focusing a control — status shows `tier=A|B|C`, read/write flags, process.
-
-#### Permissions / limitations
-
-- No admin required for same-integrity desktop apps.
-- Elevated targets / hostile providers → soft-fail → Tier C / clipboard.
-- Password fields (`IsPassword`) refused (no read/write).
-- Self-focus (BiSpell process): orchestrator avoids fighting own controls (editor text or clipboard).
-- **Not** always-on underlines; **not** a full Accessibility overlay product.
-
-### Phase 4 — editor as-you-type + suggestion popup
-
-**In-app only** (the main `EditorBox`). Does **not** watch other apps or register UIA focus observers. Phase 3’s global hotkey remains the cross-app utility.
-
-| Piece | Behavior |
-|-------|----------|
-| **As-you-type check** checkbox | Shell-only `asYouTypeEnabled` (default **true**). Off → no TextChanged scheduling; F7 / Check / utility hotkey unchanged. |
-| **Debounce (ms)** NumberBox | `debounceMilliseconds` (default **250**, clamp 0–5000). Wait after typing before re-checking; also in native `BispellSettings`. |
-| Scheduler | `EditorSpellDebouncer` — single-shot `DispatcherQueueTimer`; each edit supersedes the previous pending check. |
-| Live list | Same misspelling list / model as F7; auto-selects miss nearest caret; softer status (`Live: N misspellings`). |
-| Large text | If length &gt; ~4000 UTF-16 units, uses engine **near-caret** window (radius 256); F7 remains full-document. |
-| Suggestion popup | `SuggestionPopupController` (WinUI `Popup`, best-effort near word/caret). |
-| Keyboard (popup open) | **Enter** = apply selected/top; **1–5** = that suggestion; **Esc** = dismiss. Handled before editor newline/digit insert. |
-| Programmatic text | Apply / utility `RefreshEditor` set `_suppressAsYouType` so TextChanged does not storm checks. |
-| Smoke | `BISPELL_SMOKE=1` → TextChanged schedule no-op; debouncer never arms timers; popup Show no-ops. |
-
-#### How to use
-
-1. Leave **As-you-type check** on (default). Optionally set **Debounce (ms)** (e.g. 250).
-2. Type in the main editor, e.g. `I recieve mail. merhabaa dünya`.
-3. After ~debounce ms of quiet, the misspellings list refreshes and a suggestion popup appears for the miss nearest the caret.
-4. Press **Enter** or **1** to apply; **Esc** to dismiss without applying.
-5. Uncheck as-you-type → further typing does not auto-check; **F7** still runs a full check.
-6. Global hotkey / UIA / clipboard (Phase 2–3) are unchanged and do not drive as-you-type.
-
-**Non-goals (still out):** system-wide continuous underlines, multi-app focus observers, red underlines inside the TextBox, Mac overlay pixel parity.
+**Removed from product:** global hotkey (`RegisterHotKey`), clipboard utility path, UIA assist / probe button, tray balloons for utility results.
 
 ## Status
 
-**Windows MVP (U1–U5 + U7) + Phase 2 + Phase 3 UIA assist + Phase 4 editor as-you-type are integration-complete in-tree.** Checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
+
+**Windows product: portable core + Notes-centric WinUI shell (editor-only spell).** Historical phase checklist: [`docs/WINDOWS_PHASES.md`](WINDOWS_PHASES.md).
 
 | Layer | State |
 |-------|--------|
 | C++ core + `ctest` + C ABI | ✅ Linux-verified (`bispell_core_tests`) |
-| C# WinUI 3 shell (check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
+| C# WinUI 3 shell (Notes + check / suggest / apply) | ✅ Source complete; binary smoke on **Windows host** |
 | Settings + tray + AppData | ✅ U5 |
-| Phase 1: min word length + lexicon manage (remove/unignore) | ✅ P1-SETTINGS / P1-LEXUI |
-| Phase 2: global hotkey + clipboard replace + GLUE | ✅ P2-SETTINGS / P2-HOTKEY / P2-CLIP / P2-GLUE (`BISPELL_SMOKE` skips hotkey) |
-| Phase 3: UIA assist + UIA-first hotkey + tiers + probe | ✅ P3-SETTINGS / P3-UIA / P3-GLUE / P3-PROBE (`BISPELL_SMOKE` skips UIA + hotkey) |
-| Phase 4: editor as-you-type + suggestion popup + debounce UI | ✅ P4-SETTINGS / P4-DEBOUNCE / P4-POPUP / P4-GLUE (`BISPELL_SMOKE` no-ops as-you-type timers) |
+| Phase 1: min word length + lexicon manage | ✅ |
+| Phase 4: length-aware as-you-type + popup | ✅ (`BISPELL_SMOKE` no-ops timers) |
+| Phase 5: Notes MVP (`Notes\*.txt`) | ✅ |
+| Out-of-app hotkey / UIA / clipboard utility | ❌ **Removed** (editor-only product) |
 | Dictionary SoT packaging | ✅ Swift Resources → CMake stage + csproj copy |
 | CI (Linux core only) | ✅ `.github/workflows/windows-core.yml` |
-| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.8) |
+| Windows release zip + smoke | ✅ `.github/workflows/windows-release.yml` (e.g. v0.1.9) |
 | macOS Swift product | ✅ Unchanged |
-| U6 UIA probe (historical optional research) | ✅ **Subsumed** by Phase 3 hotkey UIA (not continuous monitoring) |
 
 **Environment note:** full WinUI binary smoke (build + F5 on Windows) is **not** run on the Linux orchestrator or the `windows-core` GitHub Action; use the manual checklist in [`WINDOWS_PHASES.md`](WINDOWS_PHASES.md) on a Windows host with VS 2022 + Windows App SDK.

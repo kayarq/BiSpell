@@ -2,7 +2,7 @@
 
 Thin **WinUI 3** host that P/Invokes `bispell_core.dll` (C ABI in `windows/core/include/bispell/c_api.h`).
 
-This is a **spell-check shell only** — not a port of macOS Notes / templates / taxonomy.
+**In-app Notes + spell-check** — not a port of macOS Notes templates/taxonomy, and **not** system-wide hotkey/UIA injection.
 
 ## Quick start (Windows)
 
@@ -20,43 +20,31 @@ BiSpell.App/
     BispellEngine.cs     ← managed RAII wrapper + result marshaling
     NativeString.cs      ← UTF-8 helpers
   Services/
-    AppPaths.cs                 ← %APPDATA%\BiSpell\ paths
+    AppPaths.cs                 ← %APPDATA%\BiSpell\ paths (+ Notes\)
     SettingsStore.cs            ← settings.json load/save
+    NotesStore.cs               ← plain-text notes under Notes\
     EditorSpellDebouncer.cs     ← as-you-type debounce (DispatcherQueueTimer)
-    TrayIconService.cs          ← WinForms NotifyIcon (show / quit)
-    GlobalHotkeyService.cs      ← Win32 RegisterHotKey
-    Win32ClipboardText.cs       ← CF_UNICODETEXT read/write
-    UiaTextAccess.cs            ← soft-fail ValuePattern probe/read/write
-    UtilityHotkeyOrchestrator.cs← UIA-first + clipboard fallback
+    TrayIconService.cs          ← Win32 Shell_NotifyIcon (show / quit)
   UI/
     SuggestionPopupController.cs← as-you-type suggestion Popup (Enter/1–5/Esc)
+  Utilities/
+    ClipboardSpellFix.cs        ← pure batch top-suggestion apply (no clipboard IO)
   Models/MisspellingItem.cs
-  MainWindow.xaml(.cs)   ← check / list / suggest / apply / settings / probe / as-you-type
-  App.xaml(.cs)          ← tray + hotkey lifecycle
+  MainWindow.xaml(.cs)   ← notes sidebar + editor check / list / suggest / apply / settings
+  App.xaml(.cs)          ← tray lifecycle (no global hotkey)
 native/                  ← staged bispell_core.dll
 scripts/                 ← build-native, stage-dictionaries
 ```
 
-## UX polish (mandate)
+## UX
 
-- Status line + misspelling count badge
-- Double-click suggestion (or misspelling) to apply
-- **F7** check; **Enter** apply top/selected suggestion
-- **As-you-type** (default on): debounced live check in the editor + suggestion popup (**Enter** / **1–5** / **Esc**)
-- Settings bar: enable, TR/EN, max suggestions, min word length, debounce, as-you-type → `%APPDATA%\BiSpell\settings.json`
+- Notes sidebar: New / Delete / select; title = first non-empty line
+- Note editor with **F7** check, misspellings list, suggestions, apply
+- **As-you-type** (default on): length-aware debounce — delete settles quietly; popup on word boundary
+- Settings: enable, TR/EN, max suggestions, min word length, debounce, as-you-type → `%APPDATA%\BiSpell\settings.json`
+- Notes files: `%APPDATA%\BiSpell\Notes\*.txt` (Ctrl+S save; auto-save on switch)
 - Tray: Show BiSpell / Quit; close window hides to tray
 
 ## Diagnostic: v0.1.3 `ToggleButton.IsChecked` crash (W1 fix)
 
-**Exception:** `Failed to assign to property 'Microsoft.UI.Xaml.Controls.Primitives.ToggleButton.IsChecked'. [Line: 0 Position: 0]` during `MainWindow` construction (compiled XAML → Line/Position 0 is normal, not a missing file).
-
-**Root cause (confirmed by code path):** During `InitializeComponent()`, XAML applied `IsChecked="True"` on `EnabledCheck` / `TurkishCheck` / `EnglishCheck` while `Checked`/`Unchecked` were already wired to `Settings_Changed`. That handler called language-guard logic and/or `SaveSettingsFromUi`, touching sibling controls not yet constructed (XAML order: Enabled → Turkish → English → NumberBox). The throw mid-property-assign is wrapped by WinUI as a `ToggleButton.IsChecked` assign failure. This is **not** a native `bispell_core.dll` fault (that would be `DllNotFoundException` after deferred engine init).
-
-**Why 0.1.3 hit this next:** Bootstrap was already off + self-contained packaging; the Runtime popup was gone, so the process reached real WinUI window construction and the settings-strip race.
-
-**Fix (Mandate B — XAML-minimal / code-driven state):**
-- XAML settings strip is structure-only: no `IsChecked`, no `Checked`/`Unchecked`, no NumberBox `Value`/`ValueChanged`.
-- Ctor: `InitializeComponent` → `LoadSettingsIntoUi` (assign `(bool?)` / max suggestions) → `WireSettingsHandlers` → clear suppress.
-- Product rules unchanged: persist to `%APPDATA%\BiSpell\settings.json`, force at least one of TR/EN, max suggestions 1–20.
-- **Control choice:** kept `CheckBox` (not `ToggleSwitch`) for layout parity with the MVP strip; non-nullable `IsOn` was not needed once events are post-init.
-- Did **not** re-enable `WindowsAppSdkBootstrapInitialize=true` or `UseWindowsForms=true`.
+Settings strip is structure-only in XAML (no `IsChecked` / handlers). Ctor: `InitializeComponent` → `LoadSettingsIntoUi` → `WireSettingsHandlers`.

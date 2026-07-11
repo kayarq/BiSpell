@@ -11,72 +11,50 @@ using Windows.System;
 namespace BiSpell;
 
 /// <summary>
-/// MVP spell shell: check → list misspellings → suggestions → apply via UTF-16 ranges.
-/// Settings persist to %APPDATA%\BiSpell\settings.json; lexicon to user-lexicon.json.
-/// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
-/// Double-click suggestion (or misspelling with a top suggestion) applies.
+/// In-app Notes + spell shell: notes sidebar, editor check → misspellings → suggestions → apply.
+/// Settings persist to %APPDATA%\BiSpell\settings.json; lexicon to user-lexicon.json;
+/// notes under %APPDATA%\BiSpell\Notes\ as .txt files.
+/// Keyboard: F7 = check, Ctrl+S = save note, Enter on suggestions = apply.
 ///
-/// Settings card (P1–P4-SETTINGS + W1): XAML holds structure only (no IsChecked /
-/// Checked / Unchecked / Value / ValueChanged). Boolean and NumberBox state + handlers
-/// are applied in the ctor after InitializeComponent and LoadSettingsIntoUi so handlers
-/// never run mid-tree construction (root cause of ToggleButton.IsChecked assign failure
-/// in v0.1.3). Exposes enable / TR / EN / maxSuggestions / minWordLength /
-/// debounceMilliseconds plus shell-only globalHotkeyEnabled / clipboardReplaceEnabled /
-/// uiaAssistEnabled / asYouTypeEnabled (shell flags not in native ABI; debounce ms is).
-/// Path hint under the card title.
+/// Settings card (W1): XAML structure only; bool/NumberBox state + handlers wired after
+/// InitializeComponent + LoadSettingsIntoUi. Exposes enable / TR / EN / maxSuggestions /
+/// minWordLength / debounceMilliseconds / asYouTypeEnabled.
 ///
-/// As-you-type (P4-GLUE): <see cref="EditorBox"/> TextChanged →
-/// <see cref="EditorSpellDebouncer"/> → shared check → list + nearest miss +
-/// <see cref="SuggestionPopupController"/>. Editor-only; not system-wide UIA.
-/// Smoke / <c>_suppressAsYouType</c> / toggle-off skip scheduling. Root keyboard
-/// routes Enter/1–5/Esc to the popup when open.
+/// As-you-type (P4 polish): length-aware scheduling —
+/// delete → hide popup + QuietRecheck after max(debounce, 450);
+/// insert letter/digit → QuietRecheck (list only) after debounce;
+/// insert whitespace/punct or same-length replace → FullAsYouType (list + popup);
+/// programmatic text sets use <c>_suppressAsYouType</c>; smoke no-ops.
 ///
-/// Utility hotkey (P2/P3-GLUE mandate B): App invokes <see cref="HandleUtilityHotkey"/> on
-/// the UI dispatcher. Orchestration lives in <see cref="UtilityHotkeyOrchestrator"/>
-/// (UIA-first when <c>uiaAssistEnabled</c>, else Phase 2 clipboard subroutine). This window
-/// is a thin <see cref="IUtilityHotkeyHost"/>: engine, settings, editor, status/tray only.
-/// No second engine instance. Concurrent F7 + hotkey serialize on the UI thread.
-///
-/// Lexicon panel (P1-LEXUI Mandate A): inline Expander with dual ListViews (Dictionary |
-/// Ignored) + Remove selected / Unignore. Live data from engine ListAddedWords /
-/// ListIgnoredWords; mutations via RemoveFromDictionary / UnignoreWord. Refresh after
-/// add/ignore/remove/unignore and after engine init. No ignore-in-app editor; no new Window.
-///
-/// Probe (P3-PROBE): “Probe focused control” calls <see cref="UiaTextAccess.TryProbeFocused"/>
-/// on the UI thread; status line + CrashLog only (no modal). Disabled in smoke and when
-/// the engine is offline. Soft-fail; never hangs launch.
+/// Editor-only product: no global hotkey, UIA, or out-of-app clipboard utility.
 /// </summary>
-public sealed partial class MainWindow : Window, IUtilityHotkeyHost
+public sealed partial class MainWindow : Window
 {
     /// <summary>Near-caret window radius (UTF-16) when document exceeds threshold.</summary>
     private const int NearCaretWindowRadius = 256;
+
+    /// <summary>Minimum settle wait after delete/backspace before quiet list recheck.</summary>
+    private const int DeleteSettleMilliseconds = 450;
 
     private BispellEngine? _engine;
     private MisspellingItem? _selectedMisspelling;
     private string? _lastError;
     private readonly SettingsStore _settingsStore = new();
     private AppUserSettings _settings = AppUserSettings.CreateDefault();
-    /// <summary>True while applying programmatic settings (load / language guard). Handlers are
-    /// also only wired after first load, so init never relies on event order.</summary>
+    /// <summary>True while applying programmatic settings (load / language guard).</summary>
     private bool _suppressSettingsEvents = true;
     private string? _lexiconPath;
     private bool _settingsHandlersWired;
 
-    /// <summary>UIA-first + clipboard utility orchestrator (owns re-entrancy + path policy).</summary>
-    private readonly UtilityHotkeyOrchestrator _utilityOrchestrator;
-
-    /// <summary>Shared soft-fail UIA facade for the probe button (COM cache inside).</summary>
-    private readonly UiaTextAccess _uiaProbe = new();
-
-    /// <summary>P4-GLUE: debounced as-you-type scheduler (UI dispatcher only).</summary>
+    /// <summary>P4: debounced as-you-type scheduler (UI dispatcher only).</summary>
     private EditorSpellDebouncer? _editorSpellDebouncer;
 
-    /// <summary>P4-GLUE: suggestion popup near editor / caret estimate.</summary>
+    /// <summary>P4: suggestion popup near editor / caret estimate.</summary>
     private SuggestionPopupController? _suggestionPopup;
 
     /// <summary>
-    /// True while programmatically setting <see cref="EditorBox"/>.Text (apply / utility
-    /// RefreshEditor) so TextChanged does not storm debounced checks.
+    /// True while programmatically setting <see cref="EditorBox"/>.Text so TextChanged
+    /// does not storm debounced checks.
     /// </summary>
     private bool _suppressAsYouType;
 
@@ -89,22 +67,31 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     /// </summary>
     private bool _suppressMissListSideEffects;
 
+    /// <summary>Previous editor text length for insert vs delete detection.</summary>
+    private int _lastEditorTextLength = -1;
+
+    /// <summary>
+    /// When the next debounced fire runs: true → list + nearest + popup;
+    /// false → list update only (no popup open).
+    /// </summary>
+    private bool _asYouTypeWantPopup;
+
+    // ---- Notes MVP ----
+    private readonly NotesStore _notesStore = new();
+    private NoteItem? _activeNote;
+    private bool _suppressNotesSelection;
+    private bool _noteDirty;
+
     public MainWindow()
     {
         // W2: ctor is wrapped by App.OnLaunched try/catch → WriteFatal + Environment.Exit(1).
-        // Markers here make XAML vs post-init failures easy to spot in BiSpell-startup.log.
         CrashLog.Write("MainWindow ctor: begin");
 
-        // 1) Build visual tree with inert settings controls (no XAML event/state coupling).
         InitializeComponent();
         CrashLog.Write("MainWindow ctor: InitializeComponent done");
-        Title = "BiSpell — Spell Check";
+        Title = "BiSpell — Notes";
 
-        // P3-GLUE: host = this (engine/settings/UI); orchestrator owns UIA + clipboard IO.
-        _utilityOrchestrator = new UtilityHotkeyOrchestrator(this);
-
-        // P4-GLUE: debouncer + suggestion popup + TextChanged (after visual tree exists).
-        // Smoke: Schedule is a hard no-op inside the debouncer; TextChanged also early-returns.
+        // As-you-type: debouncer + suggestion popup + TextChanged (after visual tree exists).
         try
         {
             _editorSpellDebouncer = new EditorSpellDebouncer(DispatcherQueue);
@@ -115,7 +102,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 _suggestionPopup = new SuggestionPopupController(EditorBox);
                 _suggestionPopup.SuggestionChosen += SuggestionPopup_SuggestionChosen;
                 EditorBox.TextChanged += EditorBox_TextChanged;
-                // Digits/Enter often stay on the TextBox; handle before insert when popup open.
                 EditorBox.KeyDown += EditorBox_KeyDown;
             }
             CrashLog.Write("MainWindow ctor: as-you-type debouncer + popup wired");
@@ -126,20 +112,24 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             CrashLog.Write(ex);
         }
 
-        // 2) Drive all boolean / numeric state from code while handlers are still unwired.
         LoadSettingsIntoUi();
-
-        // 3) Wire change handlers only after tree is complete and initial values are set.
-        //    Guarantees A1/A4/A5: no Settings_Changed during InitializeComponent, no early save.
         WireSettingsHandlers();
         _suppressSettingsEvents = false;
         CrashLog.Write("MainWindow ctor: settings loaded + handlers wired");
 
-        // P3-PROBE: start disabled until engine is ready (and stay off in smoke).
-        UpdateProbeButtonEnabled();
+        // Notes: load list + select first (after editor exists).
+        try
+        {
+            RefreshNotesList(selectPath: null);
+            CrashLog.Write("MainWindow ctor: notes list loaded");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("MainWindow ctor: notes load failed (non-fatal):");
+            CrashLog.Write(ex);
+        }
 
         // Defer native engine load so a missing VC++ runtime / DLL cannot kill the window before paint.
-        // Engine failures are non-fatal for window startup (status already ok after Activate).
         try
         {
             DispatcherQueue.TryEnqueue(() =>
@@ -160,10 +150,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
         Closed += (_, _) =>
         {
-            // Persist latest settings on teardown.
             try { SaveSettingsFromUi(); } catch { /* ignore */ }
+            try { PersistActiveNote(); } catch { /* ignore */ }
 
-            // P4-GLUE: stop timers / popup before engine dispose (no fire after close).
             try
             {
                 _editorSpellDebouncer?.Cancel();
@@ -204,16 +193,21 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
     public void PersistSettings() => SaveSettingsFromUi();
 
-    /// <summary>Shell setting: global clipboard-utility hotkey enabled (for App registration).</summary>
-    public bool IsGlobalHotkeyEnabled => _settings.GlobalHotkeyEnabled;
+    /// <summary>Save the active note body if dirty (called on hide/quit/switch).</summary>
+    public void PersistActiveNote()
+    {
+        try
+        {
+            if (_activeNote is null || !_noteDirty) return;
+            SaveActiveNoteCore(refreshList: true);
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("PersistActiveNote: " + ex.Message);
+        }
+    }
 
-    /// <summary>Shell setting: write fixed text back to clipboard after utility check.</summary>
-    public bool IsClipboardReplaceEnabled => _settings.ClipboardReplaceEnabled;
-
-    /// <summary>Shell setting: try focused-control UIA before clipboard on utility hotkey (P3).</summary>
-    public bool IsUiaAssistEnabled => _settings.UiaAssistEnabled;
-
-    /// <summary>Shell setting: debounced as-you-type check in the editor (P4; GLUE wires TextChanged).</summary>
+    /// <summary>Shell setting: debounced as-you-type check in the editor.</summary>
     public bool IsAsYouTypeEnabled => _settings.AsYouTypeEnabled;
 
     /// <summary>Current debounce wait in ms (native + as-you-type scheduler; default 250).</summary>
@@ -254,26 +248,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (DebounceBox is not null)
             DebounceBox.ValueChanged += DebounceBox_ValueChanged;
 
-        // P2/P3-SETTINGS: shell-only utility toggles (no engine ApplySettingsToEngine needed).
-        if (GlobalHotkeyCheck is not null)
-        {
-            GlobalHotkeyCheck.Checked += UtilitySettings_Changed;
-            GlobalHotkeyCheck.Unchecked += UtilitySettings_Changed;
-        }
-
-        if (ClipboardReplaceCheck is not null)
-        {
-            ClipboardReplaceCheck.Checked += UtilitySettings_Changed;
-            ClipboardReplaceCheck.Unchecked += UtilitySettings_Changed;
-        }
-
-        if (UiaAssistCheck is not null)
-        {
-            UiaAssistCheck.Checked += UtilitySettings_Changed;
-            UiaAssistCheck.Unchecked += UtilitySettings_Changed;
-        }
-
-        // P4-SETTINGS: as-you-type is shell-only; persist only (GLUE will cancel/restart debounce).
         if (AsYouTypeCheck is not null)
         {
             AsYouTypeCheck.Checked += EditorSettings_Changed;
@@ -289,7 +263,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         _suppressSettingsEvents = true;
         try
         {
-            // Explicit nullable bool assign; values come from code only (not XAML defaults).
             if (EnabledCheck is not null)
                 EnabledCheck.IsChecked = (bool?)_settings.IsEnabled;
             if (TurkishCheck is not null)
@@ -302,35 +275,26 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 MinWordLengthBox.Value = Math.Clamp(_settings.MinWordLength, 1, 10);
             if (DebounceBox is not null)
                 DebounceBox.Value = Math.Clamp(_settings.DebounceMilliseconds, 0, 5000);
-
-            // Shell-only utility flags (P2/P3-SETTINGS); not pushed to native BispellSettings.
-            if (GlobalHotkeyCheck is not null)
-                GlobalHotkeyCheck.IsChecked = (bool?)_settings.GlobalHotkeyEnabled;
-            if (ClipboardReplaceCheck is not null)
-                ClipboardReplaceCheck.IsChecked = (bool?)_settings.ClipboardReplaceEnabled;
-            if (UiaAssistCheck is not null)
-                UiaAssistCheck.IsChecked = (bool?)_settings.UiaAssistEnabled;
-
-            // P4-SETTINGS: as-you-type shell toggle (default true; not native ABI).
             if (AsYouTypeCheck is not null)
                 AsYouTypeCheck.IsChecked = (bool?)_settings.AsYouTypeEnabled;
 
-            // Path hint: concrete settings.json location when AppData is available.
             if (SettingsPathHint is not null)
             {
                 try
                 {
-                    SettingsPathHint.Text = $"Saved to {AppPaths.SettingsPath}";
+                    SettingsPathHint.Text =
+                        $"Saved to {AppPaths.SettingsPath} · notes: {AppPaths.NotesDirectory}";
                 }
                 catch
                 {
-                    SettingsPathHint.Text = "Saved to %APPDATA%\\BiSpell\\settings.json";
+                    SettingsPathHint.Text =
+                        "Saved to %APPDATA%\\BiSpell\\settings.json · notes under Notes\\";
                 }
             }
         }
         finally
         {
-            // Leave suppress true until WireSettingsHandlers completes in ctor; caller clears it.
+            // Leave suppress true until WireSettingsHandlers completes in ctor.
         }
     }
 
@@ -360,13 +324,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 ? 250
                 : (int)Math.Clamp(DebounceBox.Value, 0, 5000);
         }
-
-        if (GlobalHotkeyCheck is not null)
-            _settings.GlobalHotkeyEnabled = GlobalHotkeyCheck.IsChecked == true;
-        if (ClipboardReplaceCheck is not null)
-            _settings.ClipboardReplaceEnabled = ClipboardReplaceCheck.IsChecked == true;
-        if (UiaAssistCheck is not null)
-            _settings.UiaAssistEnabled = UiaAssistCheck.IsChecked == true;
         if (AsYouTypeCheck is not null)
             _settings.AsYouTypeEnabled = AsYouTypeCheck.IsChecked == true;
 
@@ -392,7 +349,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (_suppressSettingsEvents) return;
         if (TurkishCheck is null || EnglishCheck is null || EnabledCheck is null) return;
 
-        // Keep at least one language on (UI + model). Product rule: never both TR and EN off.
+        // Keep at least one language on (UI + model).
         if (TurkishCheck.IsChecked != true && EnglishCheck.IsChecked != true)
         {
             _suppressSettingsEvents = true;
@@ -416,37 +373,7 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     }
 
     /// <summary>
-    /// Shell-only utility toggles (global hotkey / clipboard replace / UIA assist). Persist
-    /// only; do not call <see cref="ApplySettingsToEngine"/> (flags are not in BispellSettings).
-    /// Hotkey register/unregister via <see cref="App.SyncGlobalHotkeyFromSettings"/> (no restart).
-    /// UIA assist is read at hotkey time (P3-GLUE); no COM registration here.
-    /// </summary>
-    private void UtilitySettings_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_suppressSettingsEvents) return;
-
-        SaveSettingsFromUi();
-
-        // Register / unregister without process restart when Global hotkey toggles.
-        try
-        {
-            App.Current.SyncGlobalHotkeyFromSettings();
-        }
-        catch (Exception ex)
-        {
-            CrashLog.Write("UtilitySettings_Changed hotkey sync: " + ex.Message);
-        }
-
-        SetStatus(
-            $"Utility settings saved (hotkey={(_settings.GlobalHotkeyEnabled ? "on" : "off")}, " +
-            $"clipboard replace={(_settings.ClipboardReplaceEnabled ? "on" : "off")}, " +
-            $"UIA assist={(_settings.UiaAssistEnabled ? "on" : "off")}).",
-            CountFromList());
-    }
-
-    /// <summary>
-    /// Shell-only editor toggles (as-you-type). Persist; cancel debouncer + hide popup when off;
-    /// optional immediate schedule when turned on and the editor has text.
+    /// Shell-only editor toggles (as-you-type). Persist; cancel debouncer + hide popup when off.
     /// </summary>
     private void EditorSettings_Changed(object sender, RoutedEventArgs e)
     {
@@ -464,10 +391,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             return;
         }
 
-        // Toggled on: one schedule if there is text (smoke / suppress still gate inside).
         try
         {
-            ScheduleAsYouTypeCheck();
+            ScheduleAsYouTypeCheck(wantPopup: false);
         }
         catch { /* ignore */ }
 
@@ -476,235 +402,12 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             CountFromList());
     }
 
-    /// <summary>
-    /// Update the caption under the utility checkboxes with the live binding (App calls this).
-    /// </summary>
-    public void UpdateHotkeyBindingCaption(string? bindingDisplay, bool registered, bool smoke)
-    {
-        if (HotkeyBindingCaption is null) return;
-
-        try
-        {
-            if (smoke)
-            {
-                HotkeyBindingCaption.Text =
-                    "Global hotkey: disabled in smoke mode (BISPELL_SMOKE).";
-            }
-            else if (registered && !string.IsNullOrEmpty(bindingDisplay))
-            {
-                HotkeyBindingCaption.Text =
-                    $"Global hotkey: {bindingDisplay} — focus a field (UIA) or copy text, press combo to check/fix.";
-            }
-            else if (!_settings.GlobalHotkeyEnabled)
-            {
-                HotkeyBindingCaption.Text =
-                    "Global hotkey: off (enable checkbox to register Ctrl+Alt+. or fallback).";
-            }
-            else
-            {
-                HotkeyBindingCaption.Text =
-                    "Global hotkey: unavailable (Ctrl+Alt+. and Win+Shift+. both failed — another app may own them).";
-            }
-        }
-        catch
-        {
-            // Caption is cosmetic.
-        }
-    }
-
-    /// <summary>
-    /// Global utility hotkey entry (P3-GLUE). UI dispatcher only. Delegates to
-    /// <see cref="UtilityHotkeyOrchestrator"/> (UIA-first + clipboard fallback).
-    /// </summary>
-    public void HandleUtilityHotkey() => _utilityOrchestrator.HandleUtilityHotkey();
-
-    /// <summary>
-    /// P3-PROBE: soft-fail UIA probe of the currently focused control. Status + CrashLog only.
-    /// Safe if BiSpell itself is focused (reports own=1). No modal; never throws to UI.
-    /// </summary>
-    private void ProbeFocusedButton_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            if (CrashLog.IsSmokeMode)
-            {
-                const string smokeMsg = "Probe: skipped (smoke mode / BISPELL_SMOKE).";
-                CrashLog.Write("probe: " + smokeMsg);
-                SetStatus(smokeMsg, CountFromList());
-                return;
-            }
-
-            if (_engine is null)
-            {
-                const string offline = "Probe: engine offline — load dictionaries / bispell_core.dll first.";
-                CrashLog.Write("probe: " + offline);
-                SetStatus(offline, CountFromList());
-                return;
-            }
-
-            UiaFocusSnapshot? snap = _uiaProbe.TryProbeFocused();
-            if (snap is null)
-            {
-                const string none = "Probe: no snapshot (UIA unavailable or soft-fail).";
-                CrashLog.Write("probe: " + none);
-                SetStatus(none, CountFromList());
-                return;
-            }
-
-            string line = snap.ToStatusLine();
-            CrashLog.Write("probe: " + line);
-            // Value length only (never dump password / full field content to status).
-            string valueHint = snap.IsPassword
-                ? "value=(refused)"
-                : snap.CanReadValue
-                    ? $"valueLen={(snap.Value?.Length ?? 0)}"
-                    : "value=(n/a)";
-            SetStatus($"Probe: {line} {valueHint}", CountFromList());
-        }
-        catch (Exception ex)
-        {
-            // Defensive: UiaTextAccess never throws; still guard UI path.
-            CrashLog.Write("probe: unexpected " + ex.GetType().Name + ": " + ex.Message);
-            try { SetStatus("Probe failed (soft): " + ex.Message, CountFromList()); }
-            catch { /* ignore */ }
-        }
-    }
-
-    /// <summary>
-    /// Enable probe when engine is loaded and not in smoke mode; otherwise disabled.
-    /// </summary>
-    private void UpdateProbeButtonEnabled()
-    {
-        if (ProbeFocusedButton is null) return;
-        try
-        {
-            ProbeFocusedButton.IsEnabled = _engine is not null && !CrashLog.IsSmokeMode;
-        }
-        catch
-        {
-            // Button enable is cosmetic for smoke safety.
-        }
-    }
-
-    /// <summary>
-    /// Backward-compatible alias for <see cref="HandleUtilityHotkey"/> (Phase 2 name).
-    /// </summary>
-    public void HandleClipboardUtilityHotkey() => HandleUtilityHotkey();
-
-    // ---- IUtilityHotkeyHost (thin shell for orchestrator) ----
-
-    BispellEngine? IUtilityHotkeyHost.Engine => _engine;
-
-    bool IUtilityHotkeyHost.IsSpellEnabled => _settings.IsEnabled;
-
-    bool IUtilityHotkeyHost.IsUiaAssistEnabled => _settings.UiaAssistEnabled;
-
-    bool IUtilityHotkeyHost.IsClipboardReplaceEnabled => _settings.ClipboardReplaceEnabled;
-
-    void IUtilityHotkeyHost.SaveSettingsFromUi() => SaveSettingsFromUi();
-
-    bool IUtilityHotkeyHost.EnsureEngineReady()
-    {
-        if (_engine is not null)
-            return true;
-        TryInitEngine();
-        return _engine is not null;
-    }
-
-    string? IUtilityHotkeyHost.GetEditorText()
-    {
-        try
-        {
-            return EditorBox?.Text;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    void IUtilityHotkeyHost.ApplySettingsToEngine() => ApplySettingsToEngine();
-
-    void IUtilityHotkeyHost.RefreshEditor(
-        string text,
-        IReadOnlyList<MisspellingItem> misses,
-        bool showWindow)
-    {
-        try
-        {
-            // Suppress as-you-type while utility pastes text into the editor (no check storm).
-            _suppressAsYouType = true;
-            try
-            {
-                if (EditorBox is not null)
-                    EditorBox.Text = text ?? string.Empty;
-            }
-            finally
-            {
-                _suppressAsYouType = false;
-            }
-
-            try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
-            try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
-
-            if (MisspellingsList is not null)
-                MisspellingsList.ItemsSource = misses;
-
-            if (SuggestionsList is not null)
-                SuggestionsList.ItemsSource = null;
-
-            _selectedMisspelling = null;
-            UpdateActionButtons();
-        }
-        catch (Exception ex)
-        {
-            _suppressAsYouType = false;
-            CrashLog.Write("RefreshEditor (utility): " + ex.Message);
-        }
-
-        // Only after UIA/clipboard write attempts (orchestrator guarantees call order).
-        if (showWindow)
-        {
-            try { App.Current.ShowMainWindow(); }
-            catch { /* ignore */ }
-        }
-    }
-
-    void IUtilityHotkeyHost.NotifyFeedback(string pathLabel, string body, int misspellingCount)
-    {
-        string prefix = string.IsNullOrEmpty(pathLabel) ? "Utility" : $"Utility ({pathLabel})";
-        string status = prefix + ": " + body;
-
-        try
-        {
-            SetStatus(status, misspellingCount);
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            // Tray: keep body short; include path when useful.
-            string tray = string.IsNullOrEmpty(pathLabel) ? body : $"[{pathLabel}] {body}";
-            App.Current.ShowTrayBalloon("BiSpell", tray);
-        }
-        catch { /* ignore */ }
-
-        CrashLog.Write("utility: " + status);
-    }
-
-    void IUtilityHotkeyHost.RunEditorRecheck()
-    {
-        try { RunCheck(); }
-        catch { /* best-effort */ }
-    }
-
     private void MaxSuggestionsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         if (_suppressSettingsEvents) return;
         if (MaxSuggestionsBox is null) return;
         if (double.IsNaN(args.NewValue)) return;
 
-        // Clamp to product rule 1–20 in the UI as well as the model.
         double clamped = Math.Clamp(args.NewValue, 1, 20);
         if (!double.IsNaN(MaxSuggestionsBox.Value) && Math.Abs(MaxSuggestionsBox.Value - clamped) > 0.001)
         {
@@ -726,7 +429,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (MinWordLengthBox is null) return;
         if (double.IsNaN(args.NewValue)) return;
 
-        // Clamp to product rule 1–10 (matches AppUserSettings.Normalize / engine).
         double clamped = Math.Clamp(args.NewValue, 1, 10);
         if (!double.IsNaN(MinWordLengthBox.Value) && Math.Abs(MinWordLengthBox.Value - clamped) > 0.001)
         {
@@ -748,7 +450,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (DebounceBox is null) return;
         if (double.IsNaN(args.NewValue)) return;
 
-        // Clamp to model rule 0–5000 (matches AppUserSettings.Normalize / native ToNative).
         double clamped = Math.Clamp(args.NewValue, 0, 5000);
         if (!double.IsNaN(DebounceBox.Value) && Math.Abs(DebounceBox.Value - clamped) > 0.001)
         {
@@ -758,15 +459,235 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
 
         SaveSettingsFromUi();
-        // Debounce is in BispellSettings; keep native in sync for consistency.
         ApplySettingsToEngine();
-        // Next as-you-type Schedule reads _settings.DebounceMilliseconds; keep property in sync.
         if (_editorSpellDebouncer is not null)
             _editorSpellDebouncer.DebounceMilliseconds = _settings.DebounceMilliseconds;
         SetStatus(
-            $"Debounce = {_settings.DebounceMilliseconds} ms (saved). Wait after typing before re-checking.",
+            $"Debounce = {_settings.DebounceMilliseconds} ms (saved). Applies after typing pause / after delete settle.",
             CountFromList());
     }
+
+    // =========================================================================
+    // Notes MVP
+    // =========================================================================
+
+    private void RefreshNotesList(string? selectPath)
+    {
+        var notes = _notesStore.ListNotes(ensureSampleIfEmpty: true);
+        _suppressNotesSelection = true;
+        try
+        {
+            if (NotesList is not null)
+                NotesList.ItemsSource = notes;
+
+            NoteItem? pick = null;
+            if (!string.IsNullOrEmpty(selectPath))
+                pick = notes.FirstOrDefault(n =>
+                    string.Equals(n.FilePath, selectPath, StringComparison.OrdinalIgnoreCase));
+            pick ??= notes.FirstOrDefault();
+
+            if (NotesList is not null && pick is not null)
+                NotesList.SelectedItem = pick;
+
+            if (pick is not null)
+                LoadNoteIntoEditor(pick, markClean: true);
+            else
+            {
+                _activeNote = null;
+                SetEditorTextProgrammatic(string.Empty);
+                _noteDirty = false;
+                UpdateNoteChrome();
+            }
+        }
+        finally
+        {
+            _suppressNotesSelection = false;
+        }
+
+        UpdateNoteActionButtons();
+    }
+
+    private void LoadNoteIntoEditor(NoteItem note, bool markClean)
+    {
+        _activeNote = note;
+        string body;
+        try { body = _notesStore.ReadBody(note.FilePath); }
+        catch (Exception ex)
+        {
+            body = string.Empty;
+            CrashLog.Write("LoadNoteIntoEditor: " + ex.Message);
+        }
+
+        SetEditorTextProgrammatic(body);
+        _noteDirty = !markClean;
+        UpdateNoteChrome();
+        UpdateNoteActionButtons();
+
+        // Soft quiet recheck after load (list only).
+        try { ScheduleAsYouTypeCheck(wantPopup: false); } catch { /* ignore */ }
+    }
+
+    private void SetEditorTextProgrammatic(string text)
+    {
+        _suppressAsYouType = true;
+        try
+        {
+            if (EditorBox is not null)
+                EditorBox.Text = text ?? string.Empty;
+            _lastEditorTextLength = (text ?? string.Empty).Length;
+        }
+        finally
+        {
+            _suppressAsYouType = false;
+        }
+
+        try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+        try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
+    }
+
+    private void UpdateNoteChrome()
+    {
+        if (EditorHeader is null) return;
+        string title = _activeNote?.Title ?? "Note";
+        string dirty = _noteDirty ? " •" : string.Empty;
+        EditorHeader.Text = $"Note — {title}{dirty}";
+        try
+        {
+            Title = _activeNote is null
+                ? "BiSpell — Notes"
+                : $"BiSpell — {title}{dirty}";
+        }
+        catch { /* ignore */ }
+    }
+
+    private void UpdateNoteActionButtons()
+    {
+        if (DeleteNoteButton is not null)
+            DeleteNoteButton.IsEnabled = _activeNote is not null;
+        if (SaveNoteButton is not null)
+            SaveNoteButton.IsEnabled = _activeNote is not null;
+    }
+
+    private void NotesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressNotesSelection) return;
+        var next = NotesList?.SelectedItem as NoteItem;
+        if (next is null) return;
+        if (_activeNote is not null
+            && string.Equals(next.FilePath, _activeNote.FilePath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Auto-save current before switch.
+        try
+        {
+            if (_activeNote is not null && _noteDirty)
+                SaveActiveNoteCore(refreshList: false);
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("auto-save on switch: " + ex.Message);
+        }
+
+        LoadNoteIntoEditor(next, markClean: true);
+        SetStatus($"Opened “{next.Title}”.", CountFromList());
+    }
+
+    private void NewNoteButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_activeNote is not null && _noteDirty)
+                SaveActiveNoteCore(refreshList: false);
+
+            var created = _notesStore.CreateNote(string.Empty);
+            RefreshNotesList(selectPath: created.FilePath);
+            SetStatus("New note created.", 0);
+            try { EditorBox?.Focus(FocusState.Programmatic); } catch { /* ignore */ }
+        }
+        catch (Exception ex)
+        {
+            ShowError("Could not create note", ex.Message);
+        }
+    }
+
+    private void DeleteNoteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeNote is null) return;
+        try
+        {
+            string path = _activeNote.FilePath;
+            string title = _activeNote.Title;
+            _notesStore.DeleteNote(path);
+            _activeNote = null;
+            _noteDirty = false;
+            RefreshNotesList(selectPath: null);
+            SetStatus($"Deleted “{title}”.", 0);
+        }
+        catch (Exception ex)
+        {
+            ShowError("Could not delete note", ex.Message);
+        }
+    }
+
+    private void SaveNoteButton_Click(object sender, RoutedEventArgs e) => SaveActiveNoteManual();
+
+    private void SaveActiveNoteManual()
+    {
+        if (_activeNote is null)
+        {
+            SetStatus("No note selected to save.", CountFromList());
+            return;
+        }
+
+        try
+        {
+            SaveActiveNoteCore(refreshList: true);
+            SetStatus($"Saved “{_activeNote.Title}”.", CountFromList());
+        }
+        catch (Exception ex)
+        {
+            ShowError("Save failed", ex.Message);
+        }
+    }
+
+    private void SaveActiveNoteCore(bool refreshList)
+    {
+        if (_activeNote is null) return;
+        string body = EditorBox?.Text ?? string.Empty;
+        var updated = _notesStore.SaveBody(_activeNote.FilePath, body);
+        _activeNote = updated;
+        _noteDirty = false;
+        UpdateNoteChrome();
+
+        if (refreshList)
+        {
+            string path = updated.FilePath;
+            _suppressNotesSelection = true;
+            try
+            {
+                var notes = _notesStore.ListNotes(ensureSampleIfEmpty: false);
+                if (NotesList is not null)
+                {
+                    NotesList.ItemsSource = notes;
+                    var pick = notes.FirstOrDefault(n =>
+                        string.Equals(n.FilePath, path, StringComparison.OrdinalIgnoreCase));
+                    if (pick is not null)
+                    {
+                        NotesList.SelectedItem = pick;
+                        _activeNote = pick;
+                    }
+                }
+            }
+            finally
+            {
+                _suppressNotesSelection = false;
+            }
+        }
+    }
+
+    // =========================================================================
+    // Engine
+    // =========================================================================
 
     private void TryInitEngine()
     {
@@ -783,11 +704,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                     "See windows/README.md for packaging steps.");
                 SetStatus("Engine not loaded — missing dictionaries.", 0);
                 RefreshLexiconLists();
-                UpdateProbeButtonEnabled();
                 return;
             }
 
-            // Verify files exist with a clear message before calling native.
             var en = Path.Combine(dictDir, "en_US.dic");
             var tr = Path.Combine(dictDir, "tr.dic");
             if (!File.Exists(en) || !File.Exists(tr))
@@ -799,11 +718,9 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                     $"tr.dic present: {File.Exists(tr)}");
                 SetStatus("Engine not loaded — incomplete dictionary folder.", 0);
                 RefreshLexiconLists();
-                UpdateProbeButtonEnabled();
                 return;
             }
 
-            // Ensure latest UI values are in _settings before create.
             SaveSettingsFromUi();
             var settings = _settings.ToNative();
 
@@ -814,7 +731,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             }
             catch
             {
-                // Memory-only lexicon if AppData unavailable.
                 _lexiconPath = null;
             }
 
@@ -822,16 +738,14 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             _engine = BispellEngine.Create(dictDir, _lexiconPath, settings);
             ErrorBar.IsOpen = false;
             RefreshLexiconLists();
-            UpdateProbeButtonEnabled();
 
             var settingsHint = AppPaths.SettingsPath;
             SetStatus(
-                $"Engine ready — dicts: {dictDir} | settings: {settingsHint} | lexicon: {_lexiconPath ?? "(memory)"}",
+                $"Engine ready — dicts: {dictDir} | settings: {settingsHint} | notes: {AppPaths.NotesDirectory}",
                 0);
         }
         catch (DllNotFoundException ex)
         {
-            // Keep DllNotFoundException text in startup log for smoke search (non-fatal window).
             CrashLog.Write(ex);
             ShowError(
                 "Native library not found (bispell_core.dll)",
@@ -842,7 +756,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 ex.Message);
             SetStatus("Engine not loaded — bispell_core.dll missing.", 0);
             RefreshLexiconLists();
-            UpdateProbeButtonEnabled();
         }
         catch (BadImageFormatException ex)
         {
@@ -852,14 +765,12 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 "Rebuild the DLL for the same platform as the app.\n\n" + ex.Message);
             SetStatus("Engine not loaded — bad image format.", 0);
             RefreshLexiconLists();
-            UpdateProbeButtonEnabled();
         }
         catch (BispellException ex)
         {
             ShowError("Failed to load spell engine", ex.Message);
             SetStatus("Engine not loaded — see error bar.", 0);
             RefreshLexiconLists();
-            UpdateProbeButtonEnabled();
         }
         catch (Exception ex)
         {
@@ -867,7 +778,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             ShowError("Unexpected startup error", ex.Message);
             SetStatus("Engine not loaded — unexpected error.", 0);
             RefreshLexiconLists();
-            UpdateProbeButtonEnabled();
         }
     }
 
@@ -878,16 +788,13 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
     {
         var candidates = new List<string>();
 
-        // 1) Next to the executable (packaged / CopyToOutputDirectory)
         var baseDir = AppContext.BaseDirectory;
         candidates.Add(Path.Combine(baseDir, "Dictionaries"));
 
-        // 2) Env override for tests / custom installs
         var env = Environment.GetEnvironmentVariable("BISPELL_DICT_DIR");
         if (!string.IsNullOrWhiteSpace(env))
             candidates.Insert(0, env);
 
-        // 3) Walk up from base dir / cwd looking for SoT
         foreach (var start in new[] { baseDir, Directory.GetCurrentDirectory() })
         {
             try
@@ -916,28 +823,30 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         return null;
     }
 
+    // =========================================================================
+    // Spell check
+    // =========================================================================
+
     private void CheckButton_Click(object sender, RoutedEventArgs e) => RunCheck();
 
     private void RunCheck()
     {
-        // Manual F7 / Check: full document, user-facing status; dismiss popup first.
         try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
-        RunCheckCore(interactiveStatus: true, asYouType: false);
+        RunCheckCore(interactiveStatus: true, asYouType: false, wantPopup: false);
     }
 
     /// <summary>
     /// Shared spell-check path for F7 and as-you-type. Updates misspelling list; as-you-type
-    /// also auto-selects nearest miss to caret and shows the suggestion popup.
+    /// with <paramref name="wantPopup"/> also auto-selects nearest miss and shows popup.
+    /// Quiet as-you-type updates the list (and nearest selection) without opening the popup.
     /// </summary>
-    /// <param name="interactiveStatus">True → full F7 status strings + ErrorBar on failure.</param>
-    /// <param name="asYouType">True → near-caret for large text, softer status, popup.</param>
-    private void RunCheckCore(bool interactiveStatus, bool asYouType)
+    private void RunCheckCore(bool interactiveStatus, bool asYouType, bool wantPopup)
     {
         if (_checkBusy) return;
 
         if (_engine is null)
         {
-            if (asYouType) return; // soft no-op while engine still loading
+            if (asYouType) return;
             TryInitEngine();
             if (_engine is null)
             {
@@ -949,7 +858,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         _checkBusy = true;
         try
         {
-            // Push latest settings so enable/maxSuggestions gate the check.
             ApplySettingsToEngine();
 
             var text = EditorBox?.Text ?? string.Empty;
@@ -977,7 +885,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
                 if (asYouType)
                 {
-                    // Live path: nearest miss to caret; fill suggestions without stealing focus.
                     var nearest = FindNearestMisspelling(misspellings, caret);
                     _selectedMisspelling = nearest;
 
@@ -1026,15 +933,19 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                     }
                     else
                     {
+                        string modeHint = wantPopup ? "" : " (list only)";
                         SetStatus(
                             n == 0
                                 ? "Live: no misspellings."
                                 : $"Live: {n} misspelling{(n == 1 ? "" : "s")}"
                                   + (nearCaretOnly ? " (near caret)" : "")
+                                  + modeHint
                                   + (nearest is not null ? $" — “{nearest.Word}”." : "."),
                             n);
 
-                        if (_settings.AsYouTypeEnabled
+                        // Popup only on FullAsYouType (word boundary / replace), never on quiet.
+                        if (wantPopup
+                            && _settings.AsYouTypeEnabled
                             && nearest is not null
                             && suggestions.Count > 0
                             && !CrashLog.IsSmokeMode)
@@ -1053,7 +964,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
                 }
                 else
                 {
-                    // F7 / manual: clear selection; user picks from the list.
                     if (SuggestionsList is not null)
                         SuggestionsList.ItemsSource = null;
                     _selectedMisspelling = null;
@@ -1113,29 +1023,23 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
     }
 
-    /// <summary>
-    /// Debouncer fire target (UI thread). Soft status; nearest miss + popup.
-    /// </summary>
+    /// <summary>Debouncer fire target (UI thread). Uses <see cref="_asYouTypeWantPopup"/>.</summary>
     private void OnAsYouTypeFire()
     {
         if (CrashLog.IsSmokeMode) return;
         if (!_settings.AsYouTypeEnabled) return;
         if (_suppressAsYouType) return;
         if (_engine is null) return;
-        if (!_settings.IsEnabled)
-        {
-            // Soft: leave or clear list without ErrorBar spam.
-            return;
-        }
+        if (!_settings.IsEnabled) return;
 
-        RunCheckCore(interactiveStatus: false, asYouType: true);
+        bool wantPopup = _asYouTypeWantPopup;
+        RunCheckCore(interactiveStatus: false, asYouType: true, wantPopup: wantPopup);
     }
 
     /// <summary>
-    /// Schedule a debounced live check using current settings. No-op when disabled / smoke /
-    /// suppress / no debouncer.
+    /// Schedule a debounced live check. Quiet = list only; Full = list + popup when ready.
     /// </summary>
-    private void ScheduleAsYouTypeCheck()
+    private void ScheduleAsYouTypeCheck(bool wantPopup, int? debounceOverrideMs = null)
     {
         if (CrashLog.IsSmokeMode) return;
         if (!_settings.AsYouTypeEnabled) return;
@@ -1144,26 +1048,89 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (_engine is null) return;
         if (!_settings.IsEnabled) return;
 
-        _editorSpellDebouncer.Schedule(OnAsYouTypeFire, _settings.DebounceMilliseconds);
+        _asYouTypeWantPopup = wantPopup;
+        int ms = debounceOverrideMs ?? _settings.DebounceMilliseconds;
+        _editorSpellDebouncer.Schedule(OnAsYouTypeFire, ms);
     }
 
     private void EditorBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        // Smoke: never schedule (debouncer also no-ops; belt-and-suspenders).
-        if (CrashLog.IsSmokeMode) return;
-        if (!_settings.AsYouTypeEnabled) return;
-        if (_suppressAsYouType) return;
-        // Soft no-op when engine offline or spell disabled (no throw).
-        if (_engine is null || !_settings.IsEnabled) return;
+        string text = EditorBox?.Text ?? string.Empty;
+        int len = text.Length;
 
-        ScheduleAsYouTypeCheck();
+        // Track dirty note even when as-you-type / smoke skips scheduling.
+        if (!_suppressAsYouType && _activeNote is not null)
+        {
+            _noteDirty = true;
+            try
+            {
+                string newTitle = NotesStore.TitleFromBody(text);
+                if (_activeNote.Title != newTitle)
+                    _activeNote.Title = newTitle;
+                UpdateNoteChrome();
+            }
+            catch { /* ignore */ }
+        }
+
+        // Smoke: never schedule as-you-type (debouncer also no-ops).
+        if (CrashLog.IsSmokeMode) { _lastEditorTextLength = len; return; }
+        if (!_settings.AsYouTypeEnabled) { _lastEditorTextLength = len; return; }
+        if (_suppressAsYouType) { _lastEditorTextLength = len; return; }
+        if (_engine is null || !_settings.IsEnabled) { _lastEditorTextLength = len; return; }
+
+        int prev = _lastEditorTextLength;
+        if (prev < 0)
+            prev = len;
+
+        try
+        {
+            if (len < prev)
+            {
+                // Delete / backspace: hide popup immediately; quieter longer settle; list only.
+                try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
+                try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
+                int settle = Math.Max(_settings.DebounceMilliseconds, DeleteSettleMilliseconds);
+                ScheduleAsYouTypeCheck(wantPopup: false, debounceOverrideMs: settle);
+            }
+            else if (len > prev)
+            {
+                char last = text[len - 1];
+                if (char.IsWhiteSpace(last) || char.IsPunctuation(last))
+                {
+                    // Word boundary → full as-you-type (list + popup).
+                    ScheduleAsYouTypeCheck(wantPopup: true);
+                }
+                else if (char.IsLetterOrDigit(last))
+                {
+                    // Mid-word letters/digits → quiet list update only after pause.
+                    ScheduleAsYouTypeCheck(wantPopup: false);
+                }
+                else
+                {
+                    // Other symbols → treat as boundary.
+                    ScheduleAsYouTypeCheck(wantPopup: true);
+                }
+            }
+            else
+            {
+                // Same length (selection replace) → full.
+                ScheduleAsYouTypeCheck(wantPopup: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("EditorBox_TextChanged schedule: " + ex.Message);
+        }
+        finally
+        {
+            _lastEditorTextLength = len;
+        }
     }
 
     private void SuggestionPopup_SuggestionChosen(object? sender, string suggestion)
     {
         if (string.IsNullOrEmpty(suggestion)) return;
 
-        // Popup clears CurrentMisspelling before the event; use list-selected / live selection.
         var miss = _selectedMisspelling;
         if (miss is null)
         {
@@ -1174,9 +1141,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         ApplySuggestionToMisspelling(miss, suggestion);
     }
 
-    /// <summary>
-    /// Nearest misspelling by UTF-16 distance from caret to the word range (0 if caret inside).
-    /// </summary>
     private static MisspellingItem? FindNearestMisspelling(
         IReadOnlyList<MisspellingItem> items,
         int caretUtf16)
@@ -1218,7 +1182,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             return;
         }
 
-        // Prefer suggestions already attached by engine check; refresh if empty.
         IReadOnlyList<string> suggestions = _selectedMisspelling.Suggestions;
         if (suggestions.Count == 0 && _engine is not null)
         {
@@ -1236,10 +1199,8 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         if (suggestions.Count > 0)
             SuggestionsList.SelectedIndex = 0;
 
-        // As-you-type live updates must not steal focus or rewrite the caret while typing.
         if (!_suppressMissListSideEffects)
         {
-            // Highlight range in editor (selection uses UTF-16 indices = C# string indices).
             try
             {
                 int start = (int)_selectedMisspelling.Utf16Location;
@@ -1278,7 +1239,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
     private void MisspellingsList_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        // Double-click misspelling: apply top suggestion if any.
         if (_selectedMisspelling is null) return;
         if (SuggestionsList.Items.Count > 0)
         {
@@ -1298,9 +1258,15 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
     private void RootGrid_KeyDown(object sender, KeyRoutedEventArgs e)
     {
-        // P4-GLUE: when suggestion popup is open, Enter / 1–5 / Esc first (before editor newline).
         if (TryHandlePopupKey(e))
             return;
+
+        if (e.Key == VirtualKey.S && IsControlDown())
+        {
+            SaveActiveNoteManual();
+            e.Handled = true;
+            return;
+        }
 
         if (e.Key == VirtualKey.F7)
         {
@@ -1309,7 +1275,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             return;
         }
 
-        // Enter applies top/selected suggestion when focus is not in the editor.
         if (e.Key == VirtualKey.Enter && !IsEditorFocused())
         {
             if (SuggestionsList.Items.Count > 0)
@@ -1320,18 +1285,31 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
     }
 
-    /// <summary>
-    /// Editor-focused path: TextBox often consumes digits/Enter before RootGrid KeyDown.
-    /// When the suggestion popup is open, route those keys first and mark Handled.
-    /// </summary>
     private void EditorBox_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Key == VirtualKey.S && IsControlDown())
+        {
+            SaveActiveNoteManual();
+            e.Handled = true;
+            return;
+        }
+
         TryHandlePopupKey(e);
     }
 
-    /// <summary>
-    /// If popup open and key is Enter/1–5/Esc, handle and set <c>e.Handled</c>. Returns true when handled.
-    /// </summary>
+    private static bool IsControlDown()
+    {
+        try
+        {
+            var state = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+            return (state & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private bool TryHandlePopupKey(KeyRoutedEventArgs e)
     {
         if (_suggestionPopup is null || !_suggestionPopup.IsOpen)
@@ -1368,10 +1346,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
     }
 
-    /// <summary>
-    /// Replace the selected misspelling in the editor using UTF-16 location/length
-    /// (same contract as NSRange on macOS / C# string indexing).
-    /// </summary>
     private void ApplySelectedSuggestion()
     {
         if (_selectedMisspelling is null)
@@ -1396,10 +1370,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         ApplySuggestionToMisspelling(_selectedMisspelling, suggestion);
     }
 
-    /// <summary>
-    /// Shared apply path for list/popup: replace UTF-16 range, suppress as-you-type during
-    /// programmatic Text set, dismiss popup, place caret after replacement, re-check.
-    /// </summary>
     private void ApplySuggestionToMisspelling(MisspellingItem miss, string suggestion)
     {
         if (miss is null || string.IsNullOrEmpty(suggestion))
@@ -1420,7 +1390,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             return;
         }
 
-        // Verify the range still matches the expected word (user may have edited).
         var current = text.Substring(start, len);
         if (!string.Equals(current, miss.Word, StringComparison.Ordinal))
         {
@@ -1432,12 +1401,11 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
 
         try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
 
-        // Suppress TextChanged → debouncer during programmatic replace (prevents thrash/loops).
         _suppressAsYouType = true;
         try
         {
             EditorBox.Text = string.Concat(text.AsSpan(0, start), suggestion, text.AsSpan(start + len));
-            // Place caret after the replacement (UTF-16 units).
+            _lastEditorTextLength = EditorBox.Text?.Length ?? 0;
             int newCaret = start + suggestion.Length;
             try
             {
@@ -1450,8 +1418,18 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             _suppressAsYouType = false;
         }
 
+        if (_activeNote is not null)
+        {
+            _noteDirty = true;
+            try
+            {
+                _activeNote.Title = NotesStore.TitleFromBody(EditorBox.Text);
+                UpdateNoteChrome();
+            }
+            catch { /* ignore */ }
+        }
+
         SetStatus($"Applied “{suggestion}” at UTF-16 {start}+{len}. Re-checking…", CountFromList());
-        // Immediate full recheck (same as pre-P4 apply loop); popup already dismissed.
         RunCheck();
     }
 
@@ -1510,7 +1488,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             SetStatus(
                 $"Removed “{word}” from personal dictionary. Re-checking…",
                 CountFromList());
-            // Re-check so the word can reappear as a misspelling if still in the editor.
             RunCheck();
         }
         catch (Exception ex)
@@ -1530,7 +1507,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
             _engine.UnignoreWord(word);
             RefreshLexiconLists();
             SetStatus($"Unignored “{word}”. Re-checking…", CountFromList());
-            // Re-check so the word can reappear as a misspelling if still in the editor.
             RunCheck();
         }
         catch (Exception ex)
@@ -1539,10 +1515,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
     }
 
-    /// <summary>
-    /// Pull live added/ignored words from the engine into the management ListViews.
-    /// Safe when engine is null (clears lists, disables actions). Does not throw to UI.
-    /// </summary>
     private void RefreshLexiconLists()
     {
         if (AddedWordsList is null || IgnoredWordsList is null)
@@ -1586,7 +1558,6 @@ public sealed partial class MainWindow : Window, IUtilityHotkeyHost
         }
         catch (Exception ex)
         {
-            // Non-fatal: leave previous items if any; surface message.
             CrashLog.Write("RefreshLexiconLists failed:");
             CrashLog.Write(ex);
             if (AddedWordsHeader is not null)

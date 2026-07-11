@@ -5,9 +5,10 @@ using BiSpell.Interop;
 namespace BiSpell.Services;
 
 /// <summary>
-/// Spell-relevant settings subset (mirrors Swift <c>AppSettings</c> / <c>SettingsStore</c>
-/// fields used by the engine). Persisted as JSON at
+/// Spell-relevant settings subset for the in-app editor. Persisted as JSON at
 /// <c>%APPDATA%\BiSpell\settings.json</c>.
+/// Extra JSON keys from older builds (globalHotkeyEnabled, clipboardReplaceEnabled,
+/// uiaAssistEnabled) are ignored on load and not rewritten.
 /// </summary>
 public sealed class AppUserSettings
 {
@@ -30,34 +31,9 @@ public sealed class AppUserSettings
     public int DebounceMilliseconds { get; set; } = 250;
 
     /// <summary>
-    /// Shell-only: when true (default), App may register the global clipboard-utility hotkey
-    /// (P2-GLUE). Not part of <see cref="BispellSettings"/> / native ABI.
-    /// JSON: <c>globalHotkeyEnabled</c>. Missing key → default true.
-    /// </summary>
-    [JsonPropertyName("globalHotkeyEnabled")]
-    public bool GlobalHotkeyEnabled { get; set; } = true;
-
-    /// <summary>
-    /// Shell-only: when true (default), clipboard utility may write the best-effort fixed
-    /// text back to the clipboard after check (P2-GLUE). Not part of native ABI.
-    /// JSON: <c>clipboardReplaceEnabled</c>. Missing key → default true.
-    /// </summary>
-    [JsonPropertyName("clipboardReplaceEnabled")]
-    public bool ClipboardReplaceEnabled { get; set; } = true;
-
-    /// <summary>
-    /// Shell-only: when true (default), utility hotkey may try focused-control text via
-    /// UI Automation before falling back to clipboard (P3-SETTINGS / P3-GLUE). Not part of
-    /// <see cref="BispellSettings"/> / native ABI.
-    /// JSON: <c>uiaAssistEnabled</c>. Missing key → default true.
-    /// </summary>
-    [JsonPropertyName("uiaAssistEnabled")]
-    public bool UiaAssistEnabled { get; set; } = true;
-
-    /// <summary>
     /// Shell-only: when true (default), the in-app editor may run debounced as-you-type
-    /// spell check (P4-SETTINGS / P4-GLUE). Not part of <see cref="BispellSettings"/> /
-    /// native ABI. JSON: <c>asYouTypeEnabled</c>. Missing key → default true.
+    /// spell check. Not part of <see cref="BispellSettings"/> / native ABI.
+    /// JSON: <c>asYouTypeEnabled</c>. Missing key → default true.
     /// </summary>
     [JsonPropertyName("asYouTypeEnabled")]
     public bool AsYouTypeEnabled { get; set; } = true;
@@ -77,16 +53,11 @@ public sealed class AppUserSettings
         // Keep at least one language enabled so empty checks are not confusing.
         if (!TurkishEnabled && !EnglishEnabled)
             EnglishEnabled = true;
-
-        // Shell-only bools need no clamp; System.Text.Json missing keys keep CLR defaults (true).
     }
 
     /// <summary>
-    /// Native engine settings only. Does <b>not</b> include shell utility flags
-    /// (<see cref="GlobalHotkeyEnabled"/>, <see cref="ClipboardReplaceEnabled"/>,
-    /// <see cref="UiaAssistEnabled"/>, <see cref="AsYouTypeEnabled"/>).
-    /// <see cref="DebounceMilliseconds"/> is included (engine-relevant); the as-you-type
-    /// toggle itself stays shell-only.
+    /// Native engine settings only. Does <b>not</b> include shell-only
+    /// <see cref="AsYouTypeEnabled"/>. <see cref="DebounceMilliseconds"/> is included.
     /// </summary>
     public BispellSettings ToNative()
     {
@@ -110,16 +81,13 @@ public sealed class AppUserSettings
         MaxSuggestions = MaxSuggestions,
         MinWordLength = MinWordLength,
         DebounceMilliseconds = DebounceMilliseconds,
-        GlobalHotkeyEnabled = GlobalHotkeyEnabled,
-        ClipboardReplaceEnabled = ClipboardReplaceEnabled,
-        UiaAssistEnabled = UiaAssistEnabled,
         AsYouTypeEnabled = AsYouTypeEnabled,
     };
 }
 
 /// <summary>
 /// Load/save <see cref="AppUserSettings"/> from
-/// <c>%APPDATA%\BiSpell\settings.json</c> (Swift SettingsStore subset, file-backed).
+/// <c>%APPDATA%\BiSpell\settings.json</c>.
 /// </summary>
 public sealed class SettingsStore
 {
