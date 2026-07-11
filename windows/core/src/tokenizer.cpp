@@ -16,17 +16,25 @@ bool is_word_cp(char32_t cp) noexcept {
     if ((cp >= U'a' && cp <= U'z') || (cp >= U'A' && cp <= U'Z')) {
         return true;
     }
+    // Hex code points only — MSVC rejects non-ASCII U'…' without /utf-8,
+    // and hex is portable across source encodings.
     switch (cp) {
-    case U'à': case U'á': case U'â': case U'ã': case U'ä': case U'å': case U'æ':
-    case U'ç': case U'è': case U'é': case U'ê': case U'ë': case U'ì': case U'í':
-    case U'î': case U'ï': case U'ð': case U'ñ': case U'ò': case U'ó': case U'ô':
-    case U'õ': case U'ö': case U'ø': case U'ù': case U'ú': case U'û': case U'ü':
-    case U'ý': case U'þ': case U'ÿ': case U'ß':
-    case U'À': case U'Á': case U'Â': case U'Ã': case U'Ä': case U'Å': case U'Æ':
-    case U'Ç': case U'È': case U'É': case U'Ê': case U'Ë': case U'Ì': case U'Í':
-    case U'Î': case U'Ï': case U'Ð': case U'Ñ': case U'Ò': case U'Ó': case U'Ô':
-    case U'Õ': case U'Ö': case U'Ø': case U'Ù': case U'Ú': case U'Û': case U'Ü':
-    case U'Ý': case U'Þ':
+    // Latin-1 lowercase accents
+    case 0x00E0u: case 0x00E1u: case 0x00E2u: case 0x00E3u: case 0x00E4u:
+    case 0x00E5u: case 0x00E6u: case 0x00E7u: case 0x00E8u: case 0x00E9u:
+    case 0x00EAu: case 0x00EBu: case 0x00ECu: case 0x00EDu: case 0x00EEu:
+    case 0x00EFu: case 0x00F0u: case 0x00F1u: case 0x00F2u: case 0x00F3u:
+    case 0x00F4u: case 0x00F5u: case 0x00F6u: case 0x00F8u: case 0x00F9u:
+    case 0x00FAu: case 0x00FBu: case 0x00FCu: case 0x00FDu: case 0x00FEu:
+    case 0x00FFu: case 0x00DFu:
+    // Latin-1 uppercase accents
+    case 0x00C0u: case 0x00C1u: case 0x00C2u: case 0x00C3u: case 0x00C4u:
+    case 0x00C5u: case 0x00C6u: case 0x00C7u: case 0x00C8u: case 0x00C9u:
+    case 0x00CAu: case 0x00CBu: case 0x00CCu: case 0x00CDu: case 0x00CEu:
+    case 0x00CFu: case 0x00D0u: case 0x00D1u: case 0x00D2u: case 0x00D3u:
+    case 0x00D4u: case 0x00D5u: case 0x00D6u: case 0x00D8u: case 0x00D9u:
+    case 0x00DAu: case 0x00DBu: case 0x00DCu: case 0x00DDu: case 0x00DEu:
+    // Turkish extended
     case 0x011Fu: // ğ
     case 0x011Eu: // Ğ
     case 0x015Fu: // ş
