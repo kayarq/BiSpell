@@ -1,0 +1,167 @@
+# Build unpackaged WinUI + native DLL on GitHub-hosted Windows runners.
+# Produces a zip release asset so contributors need NOT install VS/CMake on C:.
+#
+# Trigger: tag v* (e.g. v0.1.0-windows) or manual workflow_dispatch.
+name: windows-release
+
+on:
+  push:
+    tags:
+      - "v*-windows"
+      - "windows-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version label (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+      create_release:
+        description: "Create/update GitHub Release and attach zip"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-x64:
+    name: WinUI x64 package
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC + CMake env
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build native bispell_core.dll
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./windows/app/scripts/build-native.ps1 -Platform x64 -Config Release
+
+      - name: Publish unpackaged WinUI app (self-contained Windows App SDK)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = "dist/BiSpell-win-x64"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          dotnet publish windows/app/BiSpell.App/BiSpell.App.csproj `
+            -c Release `
+            -r win-x64 `
+            -p:Platform=x64 `
+            -p:WindowsPackageType=None `
+            -p:WindowsAppSDKSelfContained=true `
+            -p:PublishReadyToRun=false `
+            --self-contained true `
+            -o $out
+          # Ensure native DLL is next to BiSpell.App.exe
+          $dllCandidates = @(
+            "windows/app/native/x64/bispell_core.dll",
+            "windows/app/native/bispell_core.dll"
+          )
+          $dll = $dllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dll) { throw "bispell_core.dll missing after native build" }
+          Copy-Item -Force $dll (Join-Path $out "bispell_core.dll")
+          # Dictionaries (csproj should copy; re-stage SoT for safety)
+          $dictOut = Join-Path $out "Dictionaries"
+          New-Item -ItemType Directory -Force -Path $dictOut | Out-Null
+          Copy-Item -Force "Sources/BiSpellCore/Resources/Dictionaries/*" $dictOut
+          # Tiny launcher readme inside zip
+          @"
+          BiSpell for Windows (MVP unpackaged build)
+          ==========================================
+
+          1. Unzip this folder anywhere (no installer).
+          2. Run BiSpell.App.exe
+          3. Paste text, press Check (or F7), apply suggestions.
+
+          Data: %APPDATA%\BiSpell\ (settings + personal lexicon)
+
+          Requires: Windows 10 1809+ / Windows 11 (x64).
+          This is a spell-check shell — not the macOS Notes UI or system-wide AX.
+          "@ | Set-Content -Encoding UTF8 (Join-Path $out "README-WINDOWS.txt")
+
+      - name: Zip package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "${{ inputs.version }}"
+          } else {
+            "${{ github.ref_name }}" -replace '^v','' -replace '-windows$','' -replace '^windows-',''
+          }
+          if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "0.0.0" }
+          $name = "BiSpell-$ver-win-x64"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          if (Test-Path "dist/$name.zip") { Remove-Item "dist/$name.zip" -Force }
+          Compress-Archive -Path "dist/BiSpell-win-x64/*" -DestinationPath "dist/$name.zip" -Force
+          # Also keep a stable name for artifact download
+          Copy-Item -Force "dist/$name.zip" "dist/BiSpell-win-x64.zip"
+          "PACKAGE_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PACKAGE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-Item "dist/$name.zip" | Format-List Name, Length, FullName
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiSpell-win-x64
+          path: |
+            dist/BiSpell-win-x64.zip
+            dist/${{ env.PACKAGE_NAME }}.zip
+          if-no-files-found: error
+
+      - name: Resolve release tag
+        id: rel
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $ver = "${{ inputs.version }}"
+            $tag = "v$ver-windows"
+            $title = "BiSpell Windows $ver"
+          } else {
+            $tag = "${{ github.ref_name }}"
+            $title = $tag
+          }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "title=$title" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: ${{ steps.rel.outputs.title }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ## BiSpell for Windows (MVP)
+
+            Unzip and run **`BiSpell.App.exe`**. No Visual Studio or CMake install required on your PC.
+
+            | | |
+            |--|--|
+            | Arch | **x64** |
+            | Package | Unpackaged WinUI 3 + `bispell_core.dll` + TR/EN dictionaries |
+            | Data | `%APPDATA%\BiSpell\` |
+
+            ### Smoke test
+            1. Run `BiSpell.App.exe`
+            2. Paste: `I recieve mail. merhabaa dünya`
+            3. **Check** (or F7) → select typo → **Apply**
+
+            **Not included:** macOS Notes UI, system-wide Accessibility/UIA, templates.
+          files: |
+            dist/BiSpell-win-x64.zip
+            dist/${{ env.PACKAGE_NAME }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -60,6 +60,22 @@ Do not hand-edit blobs under `assets/` as the primary copy.
 
 ---
 
+## Prebuilt release (no VS/CMake on C:)
+
+WinUI cannot be compiled on Linux, and a full Visual Studio install is large. Prefer a **GitHub Actions** package:
+
+| Step | Action |
+|------|--------|
+| 1 | Download `BiSpell-*-win-x64.zip` from the repo **Releases** |
+| 2 | Unzip anywhere |
+| 3 | Run `BiSpell.App.exe` |
+
+CI workflow: [`.github/workflows/windows-release.yml`](../.github/workflows/windows-release.yml)  
+Manual: **Actions → windows-release → Run workflow** (needs push access to the fork).  
+Local equivalent (Windows only): `windows/app/scripts/package-release.ps1`.
+
+---
+
 ## Build
 
 ### 1. Portable core + tests (Linux, macOS, or Windows)

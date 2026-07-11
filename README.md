@@ -73,14 +73,23 @@ cd windows/build && ctest --output-on-failure
 
 Requires CMake ≥ 3.20 and a C++17 compiler (g++ / clang++ / MSVC). Optional CI: [`.github/workflows/windows-core.yml`](.github/workflows/windows-core.yml) (Linux core tests only).
 
-### WinUI app (Windows host only)
+### WinUI app — download a release (recommended)
+
+You do **not** need Visual Studio or CMake on your PC. CI builds the Windows package on GitHub-hosted runners:
+
+1. Open the repo **[Releases](https://github.com/kayarq/BiSpell/releases)** (or this fork’s Releases).
+2. Download **`BiSpell-*-win-x64.zip`**, unzip, run **`BiSpell.App.exe`**.
+3. Smoke: paste `I recieve mail. merhabaa dünya` → **Check** (or F7) → apply a suggestion.
+
+Workflow: [`.github/workflows/windows-release.yml`](.github/workflows/windows-release.yml) (`workflow_dispatch` or tag `v*-windows`).
+
+### WinUI app — build yourself (optional, needs disk space)
 
 1. VS 2022 + Desktop C++ + Windows App SDK / WinUI + .NET 8.
 2. `windows\app\scripts\build-native.ps1` → stages `bispell_core.dll`.
-3. Open `windows/app/BiSpell.sln` → **Debug|x64** → **F5** (unpackaged), or `dotnet build` as in [`windows/README.md`](windows/README.md).
-4. Smoke: paste `I recieve mail. merhabaa dünya` → Check → apply suggestion → Add to dictionary.
+3. Open `windows/app/BiSpell.sln` → **Debug|x64** → **F5**, or `dotnet publish` / `package-release.ps1` as in [`windows/README.md`](windows/README.md).
 
-Full WinUI binary smoke is **not** run on Linux CI; verify on a Windows machine.
+Full WinUI binary build is **not** possible from Linux; use the release workflow above.
 
 ### Dictionaries (source of truth)
 
