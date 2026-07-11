@@ -48,24 +48,23 @@
                     <TextBlock Text="Settings (saved under %APPDATA%\BiSpell\)"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Opacity="0.8"/>
+                    <!-- Structure only: no IsChecked / Checked / Unchecked / ValueChanged here.
+                         Boolean state + change handlers are attached in MainWindow code-behind
+                         after InitializeComponent + LoadSettingsIntoUi (avoids ToggleButton.IsChecked
+                         assign crash when handlers run mid-XAML tree construction). -->
                     <StackPanel Orientation="Horizontal" Spacing="16">
-                        <CheckBox x:Name="EnabledCheck" Content="Spell-check enabled" IsChecked="True"
-                                  Checked="Settings_Changed" Unchecked="Settings_Changed"/>
-                        <CheckBox x:Name="TurkishCheck" Content="Turkish" IsChecked="True"
-                                  Checked="Settings_Changed" Unchecked="Settings_Changed"/>
-                        <CheckBox x:Name="EnglishCheck" Content="English" IsChecked="True"
-                                  Checked="Settings_Changed" Unchecked="Settings_Changed"/>
+                        <CheckBox x:Name="EnabledCheck" Content="Spell-check enabled"/>
+                        <CheckBox x:Name="TurkishCheck" Content="Turkish"/>
+                        <CheckBox x:Name="EnglishCheck" Content="English"/>
                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <TextBlock Text="Max suggestions" VerticalAlignment="Center"/>
                             <NumberBox x:Name="MaxSuggestionsBox"
-                                       Value="5"
                                        Minimum="1"
                                        Maximum="20"
                                        SpinButtonPlacementMode="Inline"
                                        SmallChange="1"
                                        LargeChange="5"
-                                       Width="120"
-                                       ValueChanged="MaxSuggestionsBox_ValueChanged"/>
+                                       Width="120"/>
                         </StackPanel>
                     </StackPanel>
                 </StackPanel>

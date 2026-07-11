@@ -14,6 +14,12 @@ namespace BiSpell;
 /// Settings persist to %APPDATA%\BiSpell\settings.json; lexicon to user-lexicon.json.
 /// Keyboard: F7 = check, Enter on suggestions = apply top/selected.
 /// Double-click suggestion (or misspelling with a top suggestion) applies.
+///
+/// Settings toggles (W1 Mandate B): XAML holds structure only (no IsChecked / Checked /
+/// Unchecked / ValueChanged). All boolean state and change handlers are applied in the
+/// ctor after InitializeComponent and LoadSettingsIntoUi so handlers never run mid-tree
+/// construction (root cause of ToggleButton.IsChecked assign failure in v0.1.3).
+/// Kept CheckBox (not ToggleSwitch) for layout parity with the existing MVP strip.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -22,15 +28,26 @@ public sealed partial class MainWindow : Window
     private string? _lastError;
     private readonly SettingsStore _settingsStore = new();
     private AppUserSettings _settings = AppUserSettings.CreateDefault();
-    private bool _suppressSettingsEvents;
+    /// <summary>True while applying programmatic settings (load / language guard). Handlers are
+    /// also only wired after first load, so init never relies on event order.</summary>
+    private bool _suppressSettingsEvents = true;
     private string? _lexiconPath;
+    private bool _settingsHandlersWired;
 
     public MainWindow()
     {
+        // 1) Build visual tree with inert settings controls (no XAML event/state coupling).
         InitializeComponent();
         Title = "BiSpell — Spell Check";
 
+        // 2) Drive all boolean / numeric state from code while handlers are still unwired.
         LoadSettingsIntoUi();
+
+        // 3) Wire change handlers only after tree is complete and initial values are set.
+        //    Guarantees A1/A4/A5: no Settings_Changed during InitializeComponent, no early save.
+        WireSettingsHandlers();
+        _suppressSettingsEvents = false;
+
         // Defer native engine load so a missing VC++ runtime / DLL cannot kill the window before paint.
         try
         {
@@ -61,31 +78,75 @@ public sealed partial class MainWindow : Window
     /// <summary>Flush current UI settings to %APPDATA%\BiSpell\settings.json (called on hide/quit).</summary>
     public void PersistSettings() => SaveSettingsFromUi();
 
+    /// <summary>
+    /// Attach Checked/Unchecked/ValueChanged only after InitializeComponent + LoadSettingsIntoUi.
+    /// Idempotent. XAML must not declare these attributes.
+    /// </summary>
+    private void WireSettingsHandlers()
+    {
+        if (_settingsHandlersWired) return;
+
+        if (EnabledCheck is not null)
+        {
+            EnabledCheck.Checked += Settings_Changed;
+            EnabledCheck.Unchecked += Settings_Changed;
+        }
+
+        if (TurkishCheck is not null)
+        {
+            TurkishCheck.Checked += Settings_Changed;
+            TurkishCheck.Unchecked += Settings_Changed;
+        }
+
+        if (EnglishCheck is not null)
+        {
+            EnglishCheck.Checked += Settings_Changed;
+            EnglishCheck.Unchecked += Settings_Changed;
+        }
+
+        if (MaxSuggestionsBox is not null)
+            MaxSuggestionsBox.ValueChanged += MaxSuggestionsBox_ValueChanged;
+
+        _settingsHandlersWired = true;
+    }
+
     private void LoadSettingsIntoUi()
     {
         _settings = _settingsStore.Load();
         _suppressSettingsEvents = true;
         try
         {
-            EnabledCheck.IsChecked = _settings.IsEnabled;
-            TurkishCheck.IsChecked = _settings.TurkishEnabled;
-            EnglishCheck.IsChecked = _settings.EnglishEnabled;
-            MaxSuggestionsBox.Value = _settings.MaxSuggestions;
+            // Explicit nullable bool assign; values come from code only (not XAML defaults).
+            if (EnabledCheck is not null)
+                EnabledCheck.IsChecked = (bool?)_settings.IsEnabled;
+            if (TurkishCheck is not null)
+                TurkishCheck.IsChecked = (bool?)_settings.TurkishEnabled;
+            if (EnglishCheck is not null)
+                EnglishCheck.IsChecked = (bool?)_settings.EnglishEnabled;
+            if (MaxSuggestionsBox is not null)
+                MaxSuggestionsBox.Value = Math.Clamp(_settings.MaxSuggestions, 1, 20);
         }
         finally
         {
-            _suppressSettingsEvents = false;
+            // Leave suppress true until WireSettingsHandlers completes in ctor; caller clears it.
         }
     }
 
     private void SaveSettingsFromUi()
     {
-        _settings.IsEnabled = EnabledCheck.IsChecked == true;
-        _settings.TurkishEnabled = TurkishCheck.IsChecked == true;
-        _settings.EnglishEnabled = EnglishCheck.IsChecked == true;
-        _settings.MaxSuggestions = double.IsNaN(MaxSuggestionsBox.Value)
-            ? 5
-            : (int)Math.Clamp(MaxSuggestionsBox.Value, 1, 20);
+        if (EnabledCheck is not null)
+            _settings.IsEnabled = EnabledCheck.IsChecked == true;
+        if (TurkishCheck is not null)
+            _settings.TurkishEnabled = TurkishCheck.IsChecked == true;
+        if (EnglishCheck is not null)
+            _settings.EnglishEnabled = EnglishCheck.IsChecked == true;
+        if (MaxSuggestionsBox is not null)
+        {
+            _settings.MaxSuggestions = double.IsNaN(MaxSuggestionsBox.Value)
+                ? 5
+                : (int)Math.Clamp(MaxSuggestionsBox.Value, 1, 20);
+        }
+
         _settings.Normalize();
         _settingsStore.Save(_settings);
     }
@@ -106,14 +167,15 @@ public sealed partial class MainWindow : Window
     private void Settings_Changed(object sender, RoutedEventArgs e)
     {
         if (_suppressSettingsEvents) return;
+        if (TurkishCheck is null || EnglishCheck is null || EnabledCheck is null) return;
 
-        // Keep at least one language on (UI + model).
+        // Keep at least one language on (UI + model). Product rule: never both TR and EN off.
         if (TurkishCheck.IsChecked != true && EnglishCheck.IsChecked != true)
         {
             _suppressSettingsEvents = true;
             try
             {
-                EnglishCheck.IsChecked = true;
+                EnglishCheck.IsChecked = (bool?)true;
             }
             finally
             {
@@ -133,7 +195,18 @@ public sealed partial class MainWindow : Window
     private void MaxSuggestionsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         if (_suppressSettingsEvents) return;
+        if (MaxSuggestionsBox is null) return;
         if (double.IsNaN(args.NewValue)) return;
+
+        // Clamp to product rule 1–20 in the UI as well as the model.
+        double clamped = Math.Clamp(args.NewValue, 1, 20);
+        if (!double.IsNaN(MaxSuggestionsBox.Value) && Math.Abs(MaxSuggestionsBox.Value - clamped) > 0.001)
+        {
+            _suppressSettingsEvents = true;
+            try { MaxSuggestionsBox.Value = clamped; }
+            finally { _suppressSettingsEvents = false; }
+        }
+
         SaveSettingsFromUi();
         ApplySettingsToEngine();
         SetStatus(

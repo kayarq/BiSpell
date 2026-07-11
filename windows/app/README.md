@@ -37,3 +37,18 @@ scripts/                 ← build-native, stage-dictionaries
 - **F7** check; **Enter** apply top/selected suggestion
 - Settings bar: enable, TR/EN, max suggestions → `%APPDATA%\BiSpell\settings.json`
 - Tray: Show BiSpell / Quit; close window hides to tray
+
+## Diagnostic: v0.1.3 `ToggleButton.IsChecked` crash (W1 fix)
+
+**Exception:** `Failed to assign to property 'Microsoft.UI.Xaml.Controls.Primitives.ToggleButton.IsChecked'. [Line: 0 Position: 0]` during `MainWindow` construction (compiled XAML → Line/Position 0 is normal, not a missing file).
+
+**Root cause (confirmed by code path):** During `InitializeComponent()`, XAML applied `IsChecked="True"` on `EnabledCheck` / `TurkishCheck` / `EnglishCheck` while `Checked`/`Unchecked` were already wired to `Settings_Changed`. That handler called language-guard logic and/or `SaveSettingsFromUi`, touching sibling controls not yet constructed (XAML order: Enabled → Turkish → English → NumberBox). The throw mid-property-assign is wrapped by WinUI as a `ToggleButton.IsChecked` assign failure. This is **not** a native `bispell_core.dll` fault (that would be `DllNotFoundException` after deferred engine init).
+
+**Why 0.1.3 hit this next:** Bootstrap was already off + self-contained packaging; the Runtime popup was gone, so the process reached real WinUI window construction and the settings-strip race.
+
+**Fix (Mandate B — XAML-minimal / code-driven state):**
+- XAML settings strip is structure-only: no `IsChecked`, no `Checked`/`Unchecked`, no NumberBox `Value`/`ValueChanged`.
+- Ctor: `InitializeComponent` → `LoadSettingsIntoUi` (assign `(bool?)` / max suggestions) → `WireSettingsHandlers` → clear suppress.
+- Product rules unchanged: persist to `%APPDATA%\BiSpell\settings.json`, force at least one of TR/EN, max suggestions 1–20.
+- **Control choice:** kept `CheckBox` (not `ToggleSwitch`) for layout parity with the MVP strip; non-nullable `IsOn` was not needed once events are post-init.
+- Did **not** re-enable `WindowsAppSdkBootstrapInitialize=true` or `UseWindowsForms=true`.
