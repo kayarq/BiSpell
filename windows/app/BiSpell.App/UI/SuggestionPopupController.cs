@@ -157,6 +157,10 @@ public sealed class SuggestionPopupController : ISuggestionPopup, IDisposable
             IsItemClickEnabled = true,
             MaxHeight = ListMaxHeight,
             MinWidth = PopupMinWidth - 24,
+            // Keep keyboard focus in the editor while the popup is open (keys via TryHandleKey).
+            IsTabStop = false,
+            AllowFocusOnInteraction = false,
+            AllowFocusWhenDisabled = false,
         };
         _listView.ItemsSource = _displayRows;
         _listView.ItemClick += ListView_ItemClick;
@@ -178,7 +182,8 @@ public sealed class SuggestionPopupController : ISuggestionPopup, IDisposable
             BorderThickness = new Thickness(1),
             Background = ResolveBrush("CardBackgroundFillColorDefaultBrush", fallbackLight: true),
             BorderBrush = ResolveBrush("CardStrokeColorDefaultBrush", fallbackLight: false),
-            IsTabStop = true,
+            IsTabStop = false,
+            AllowFocusOnInteraction = false,
         };
         _chrome.KeyDown += Content_KeyDown;
 
@@ -188,6 +193,8 @@ public sealed class SuggestionPopupController : ISuggestionPopup, IDisposable
             IsLightDismissEnabled = true,
             // HorizontalOffset / VerticalOffset are relative to XamlRoot (set on each Show).
             ShouldConstrainToRootBounds = true,
+            // Do not steal keyboard focus from the editor while typing.
+            AllowFocusOnInteraction = false,
         };
         _popup.Closed += Popup_Closed;
     }

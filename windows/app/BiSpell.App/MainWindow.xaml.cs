@@ -22,7 +22,7 @@ namespace BiSpell;
 ///
 /// As-you-type (P4 polish): length-aware scheduling —
 /// delete → hide popup + QuietRecheck after max(debounce, 450);
-/// insert letter/digit → QuietRecheck (list only) after debounce;
+/// insert letter/digit → no schedule (avoids UI freeze mid-word);
 /// insert whitespace/punct or same-length replace → FullAsYouType (list + popup);
 /// programmatic text sets use <c>_suppressAsYouType</c>; smoke no-ops.
 ///
@@ -925,6 +925,7 @@ public sealed partial class MainWindow : Window
                 nearCaretOnly: nearCaretOnly,
                 windowRadius: windowRadius);
 
+            // Always suppress list side-effects that Select/Focus the editor while live-checking.
             _suppressMissListSideEffects = asYouType;
             try
             {
@@ -940,8 +941,10 @@ public sealed partial class MainWindow : Window
                     if (nearest is not null)
                     {
                         suggestions = nearest.Suggestions;
-                        if (suggestions.Count == 0 && _engine is not null)
+                        if (suggestions.Count == 0 && _engine is not null && wantPopup)
                         {
+                            // Only fetch extra suggestions when we will show the popup —
+                            // mid-path list-only updates stay cheap.
                             try
                             {
                                 suggestions = _engine.Suggestions(nearest.Word, nearest.Language);
@@ -952,19 +955,12 @@ public sealed partial class MainWindow : Window
                             }
                         }
 
-                        if (MisspellingsList is not null)
-                        {
-                            try { MisspellingsList.SelectedItem = nearest; }
-                            catch { /* selection best-effort */ }
-                        }
-                    }
-                    else if (MisspellingsList is not null)
-                    {
-                        try { MisspellingsList.SelectedItem = null; }
-                        catch { /* ignore */ }
+                        // Do not set MisspellingsList.SelectedItem during as-you-type —
+                        // selection can steal focus / feel like typing "stops".
+                        // Keep _selectedMisspelling for popup apply only.
                     }
 
-                    if (SuggestionsList is not null)
+                    if (wantPopup && SuggestionsList is not null)
                     {
                         SuggestionsList.ItemsSource = suggestions.Count > 0 ? suggestions : null;
                         if (suggestions.Count > 0)
@@ -981,15 +977,17 @@ public sealed partial class MainWindow : Window
                     }
                     else
                     {
-                        string modeHint = wantPopup ? "" : " (list only)";
-                        SetStatus(
-                            n == 0
-                                ? "Live: no misspellings."
-                                : $"Live: {n} misspelling{(n == 1 ? "" : "s")}"
-                                  + (nearCaretOnly ? " (near caret)" : "")
-                                  + modeHint
-                                  + (nearest is not null ? $" — “{nearest.Word}”." : "."),
-                            n);
+                        if (wantPopup)
+                        {
+                            SetStatus(
+                                n == 0
+                                    ? "Live: no misspellings."
+                                    : $"Live: {n} misspelling{(n == 1 ? "" : "s")}"
+                                      + (nearCaretOnly ? " (near caret)" : "")
+                                      + (nearest is not null ? $" — “{nearest.Word}”." : "."),
+                                n);
+                        }
+                        // Quiet recheck: leave status alone so we don't thrash the bar while settling.
 
                         // Popup only on FullAsYouType (word boundary / replace), never on quiet.
                         if (wantPopup
@@ -1003,6 +1001,12 @@ public sealed partial class MainWindow : Window
                             {
                                 CrashLog.Write("as-you-type popup Show failed: " + ex.Message);
                             }
+                        }
+                        else if (!wantPopup)
+                        {
+                            // Quiet path: do not Hide if already open from a prior word boundary —
+                            // only hide when we explicitly want no popup (e.g. after delete).
+                            // After delete we already Hide() in TextChanged.
                         }
                         else
                         {
@@ -1134,7 +1138,8 @@ public sealed partial class MainWindow : Window
         {
             if (len < prev)
             {
-                // Delete / backspace: hide popup immediately; quieter longer settle; list only.
+                // Delete / backspace: never spell-check mid-delete (UI-thread Check freezes typing).
+                // Hide popup; after a long settle, quiet list-only recheck.
                 try { _suggestionPopup?.Hide(); } catch { /* ignore */ }
                 try { _editorSpellDebouncer?.Cancel(); } catch { /* ignore */ }
                 int settle = Math.Max(_settings.DebounceMilliseconds, DeleteSettleMilliseconds);
@@ -1143,25 +1148,18 @@ public sealed partial class MainWindow : Window
             else if (len > prev)
             {
                 char last = text[len - 1];
+                // Mid-word typing: do NOT schedule spell check at all.
+                // Synchronous Check() on the UI thread was freezing forward typing.
+                // Only recheck when the user finishes a word (whitespace/punctuation).
                 if (char.IsWhiteSpace(last) || char.IsPunctuation(last))
                 {
-                    // Word boundary → full as-you-type (list + popup).
                     ScheduleAsYouTypeCheck(wantPopup: true);
                 }
-                else if (char.IsLetterOrDigit(last))
-                {
-                    // Mid-word letters/digits → quiet list update only after pause.
-                    ScheduleAsYouTypeCheck(wantPopup: false);
-                }
-                else
-                {
-                    // Other symbols → treat as boundary.
-                    ScheduleAsYouTypeCheck(wantPopup: true);
-                }
+                // letter/digit or other: no schedule — wait for word boundary or F7
             }
             else
             {
-                // Same length (selection replace) → full.
+                // Same length (selection replace) → full after debounce.
                 ScheduleAsYouTypeCheck(wantPopup: true);
             }
         }
