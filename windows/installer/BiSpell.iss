@@ -48,13 +48,15 @@ SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
-; Default finish text. When the taskbar task is checked, [Code] expands this with pin-yourself steps.
-FinishedLabel=Setup has finished installing [name] on your computer.%n%nA Start Menu shortcut was added.
 ; User data lives under %APPDATA%\BiSpell\ (settings, lexicon, notes).
 ; Uninstall intentionally does NOT remove that folder — no [UninstallDelete] for AppData.
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+; Default finish text. When the taskbar task is checked, [Code] expands this with pin-yourself steps.
+FinishedLabel=Setup has finished installing [name] on your computer.%n%nA Start Menu shortcut was added.
 
 [Tasks]
 ; Default unchecked: desktop shortcut only when the user opts in.
