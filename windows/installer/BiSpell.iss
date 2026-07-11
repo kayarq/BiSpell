@@ -77,7 +77,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 
 [Run]
 ; Third wizard option: launch after install (checked once by default; skipped in silent installs).
-Filename: "{app}\{#MyAppExeName}"; Description: "Start {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent checkedonce
+; [Run] has no checkedonce (that is a [Tasks] flag). Default checked; user can uncheck.
+Filename: "{app}\{#MyAppExeName}"; Description: "Start {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 ; Minimal [Code]: only adjusts FinishedLabel when the honest taskbar task is checked.
 ; No COM pin, no shell automation — guidance text only.
